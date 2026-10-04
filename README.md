@@ -47,8 +47,8 @@
 
 | 文件 | 说明 |
 |---|---|
-| `BaiAi-Tavern V0.1.exe` | Windows 安装包（约 73MB，单文件，安装 + 卸载都在里面） |
-| `SHA256SUMS.txt` | 校验值，下载后可自行核对：`certutil -hashfile "BaiAi-Tavern V0.1.exe" SHA256` |
+| `BaiAi-Tavern-V0.1.exe` | Windows 安装包（约 73MB，单文件，安装 + 卸载都在里面） |
+| `SHA256SUMS.txt` | 校验值，下载后可自行核对：`certutil -hashfile "BaiAi-Tavern-V0.1.exe" SHA256` |
 
 安装：双击 → 选择安装位置（默认 `%LOCALAPPDATA%\Programs\BaiAi-Tavern`，按用户安装、不需要管理员权限）
 → 勾选是否创建桌面/开始菜单快捷方式 → 完成。卸载在「Windows 设置 → 应用」里，
