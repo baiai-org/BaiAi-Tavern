@@ -39,6 +39,26 @@
 
 ---
 
+## 0. 下载安装（普通用户）
+
+不想自己编译的话，直接到 **Releases** 页面下载打包好的安装包：
+
+**➡ [github.com/OWNER/BaiAi-Tavern/releases](https://github.com/OWNER/BaiAi-Tavern/releases)**
+
+| 文件 | 说明 |
+|---|---|
+| `BaiAi-Tavern V0.1.exe` | Windows 安装包（约 73MB，单文件，安装 + 卸载都在里面） |
+| `SHA256SUMS.txt` | 校验值，下载后可自行核对：`certutil -hashfile "BaiAi-Tavern V0.1.exe" SHA256` |
+
+安装：双击 → 选择安装位置（默认 `%LOCALAPPDATA%\Programs\BaiAi-Tavern`，按用户安装、不需要管理员权限）
+→ 勾选是否创建桌面/开始菜单快捷方式 → 完成。卸载在「Windows 设置 → 应用」里，
+或在开始菜单里再次运行安装包选「卸载」；**卸载默认保留你的配置与聊天记录**。
+
+> 系统要求：Windows 10 / 11（64 位）。无需安装 Python 或其它运行库。
+> 首次运行会弹出 6 步配置引导，准备好「LLM 接口的 API Key」和「QQ 官方机器人的 AppID/AppSecret」即可。
+
+---
+
 ## 1. 快速开始（源码运行）
 
 ```bat
