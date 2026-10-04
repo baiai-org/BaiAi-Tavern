@@ -332,7 +332,9 @@ def main() -> int:
     mock = mock_servers.MockProcess(port=mock_port).start()
     mock.reset(reply_text=REPLY_TEXT, proactive_text=PROACTIVE_TEXT)
 
-    data_dir = Path(tempfile.mkdtemp(prefix="tavern-gui-"))
+    # resolve()：Windows CI 的 %TEMP% 是 8.3 短名（C:\Users\RUNNER~1\...），
+    # 程序的 data_dir() 会展开成长名，两边需统一后再比较
+    data_dir = Path(tempfile.mkdtemp(prefix="tavern-gui-")).resolve()
     config_path = smoke_test.write_bot_config(data_dir)
     prepare_config(config_path, mock, api_port)
 
@@ -874,9 +876,13 @@ def main() -> int:
         )
         qq_form.btn_show_secret.setChecked(False)
         def same_path(shown: str, expected) -> bool:
-            """路径比较：忽略大小写与分隔符差异（Windows 上 resolve() 会改大小写）。"""
-            left = os.path.normcase(os.path.normpath(str(shown))).replace("/", "\\")
-            right = os.path.normcase(os.path.normpath(str(expected))).replace("/", "\\")
+            """路径比较：两边都 resolve（展开 8.3 短名 / 符号链接）后忽略大小写比较。"""
+            try:
+                left = os.path.normcase(str(Path(shown).resolve()))
+                right = os.path.normcase(str(Path(expected).resolve()))
+            except Exception:  # 路径不存在等情况退化为纯字符串比较
+                left = os.path.normcase(str(shown))
+                right = os.path.normcase(str(expected))
             return right in left
 
         checker.check(
