@@ -437,6 +437,9 @@ bai-ai-tavern/
 
 ## 12. 开发提示
 
+> **接手开发请先读 [HANDOFF.md](HANDOFF.md)**：架构图、文件地图、核心不变量、开发硬约束、
+> 历史坑清单（每条都是真实踩过的）、自检体系与发版流程都在那里。
+
 ```bat
 :: 只跑单元自检（不起服务）
 python -m tests.smoke_test --unit-only
