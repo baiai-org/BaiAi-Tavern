@@ -1,6 +1,6 @@
 # BaiAi-Tavern
 
-[![CI](https://github.com/OWNER/BaiAi-Tavern/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/BaiAi-Tavern/actions/workflows/ci.yml)
+[![CI](https://github.com/baiai-org/BaiAi-Tavern/actions/workflows/ci.yml/badge.svg)](https://github.com/baiai-org/BaiAi-Tavern/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4.svg)](#)
@@ -43,7 +43,7 @@
 
 不想自己编译的话，直接到 **Releases** 页面下载打包好的安装包：
 
-**➡ [github.com/OWNER/BaiAi-Tavern/releases](https://github.com/OWNER/BaiAi-Tavern/releases)**
+**➡ [github.com/baiai-org/BaiAi-Tavern/releases](https://github.com/baiai-org/BaiAi-Tavern/releases)**
 
 | 文件 | 说明 |
 |---|---|
