@@ -873,10 +873,16 @@ def main() -> int:
             qq_form.in_app_secret.echoMode() == QLineEdit.EchoMode.Normal,
         )
         qq_form.btn_show_secret.setChecked(False)
+        def same_path(shown: str, expected) -> bool:
+            """路径比较：忽略大小写与分隔符差异（Windows 上 resolve() 会改大小写）。"""
+            left = os.path.normcase(os.path.normpath(str(shown))).replace("/", "\\")
+            right = os.path.normcase(os.path.normpath(str(expected))).replace("/", "\\")
+            return right in left
+
         checker.check(
             "设置页显示数据目录",
-            str(data_dir) in settings_page.label_data_dir.text(),
-            settings_page.label_data_dir.text(),
+            same_path(settings_page.label_data_dir.text(), data_dir),
+            "标签=%s / 期望=%s" % (settings_page.label_data_dir.text(), data_dir),
         )
         checker.check(
             "设置页显示第 1 个机器人的身份与绑定情况",
