@@ -297,7 +297,7 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 
 
 - [ ] **在真机用真实官方机器人跑一遍完整链路**（配置 → 连接 → 收消息 → 回复 → 主动消息），目前只有 mock 覆盖。
 - [ ] README 增加界面截图（对下载转化帮助很大，需人工提供图片）。
-- [ ] `SECURITY.md` 里的联系邮箱 `security@baiai.org` 待确认（不存在就改掉）。
+- [x] `SECURITY.md` 的联系方式已改为作者公开的 QQ / 微信（与 README 一致）。
 - [ ] 仓库加 topics（`qq-bot`、`pyside6`、`sillytavern`、`desktop-app` 等）提升可发现性。
 - [ ] `v0.2` 发布流程沉淀成脚本（打包 + 校验 + 建 Release + 传附件一条命令）。
 - [ ] 主动消息的"记忆摘要/压缩"（`bot/memory/long_term.py`）目前是加权条目，可考虑引入摘要模型。
