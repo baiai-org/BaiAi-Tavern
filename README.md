@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4.svg)](#)
 
-**版本 V0.1　·　作者 [baiai.org](https://baiai.org)　·　协议 [Apache-2.0](LICENSE)**
+**版本 V0.1　·　作者 [baiai.org](https://baiai.org) QQ:951424960 微信:BH8GYP　·　协议 [Apache-2.0](LICENSE)**
 
 带图形界面的 **QQ 多角色 AI 主动消息桌面应用**。
 
