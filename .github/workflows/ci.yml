@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  unit-and-e2e:
+    # 项目只支持 Windows：托盘、注册表、快捷方式、安装包都是 Windows 专有实现
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyflakes
+
+      - name: 静态检查（未定义名 / 未使用导入）
+        run: python -m pyflakes app bot common installer scripts tests
+
+      - name: 单元自检（不需要网络与真实凭据）
+        run: python -m tests.smoke_test --unit-only
+
+      - name: 端到端自检（本地 mock 官方平台 + mock LLM）
+        run: python -m tests.smoke_test
+
+      - name: 官方机器人通道自检
+        run: python -m tests.official_smoke
+
+      - name: 多机器人 / 多角色自检
+        run: python -m tests.multibot_smoke
+
+      - name: 配置引导自检
+        run: python -m tests.onboarding_smoke
+
+      - name: 界面集成自检（offscreen）
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m tests.gui_smoke
+
+      # 打包体积较大（约 70MB），只在手动触发时构建并自检
+      - name: 打包 GUI / Bot（手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          python -m PyInstaller --noconfirm --clean pyinstaller.spec
+          python -m PyInstaller --noconfirm --clean pyinstaller_bot.spec
+
+      - name: 打包产物自检（手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        run: python -m tests.frozen_smoke

@@ -1,0 +1,65 @@
+name: Bug 反馈
+description: 报告一个可复现的问题（请先看 README 的常见问题）
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量把信息填全，尤其是**日志里的报错堆栈** —— 它通常能直接定位到代码行。
+        ⚠️ 提交前请把 API Key、AppSecret、openid、聊天内容替换成 `***`。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 界面左下角「关于」里看到的版本号，或安装包文件名
+      placeholder: "V0.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - 安装包（BaiAi-Tavern V0.1.exe）
+        - 绿色版（dist\BaiAi-Tavern\）
+        - 源码运行（python -m app.main）
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: 系统
+      description: Windows 版本 + 位数（例如 Windows 11 23H2 64 位）
+      placeholder: "Windows 11 23H2 x64"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象与复现步骤
+      description: 你做了什么、期望什么、实际发生了什么（越具体越好）
+      placeholder: |
+        1. 打开「系统设置 → QQ」，填入 AppID/AppSecret
+        2. 点「测试连接」
+        3. 期望：显示已连接；实际：提示 xxx
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（关键！）
+      description: |
+        日志位置：安装版 `%LOCALAPPDATA%\Programs\BaiAi-Tavern\data\logs\`；
+        绿色版 `<程序目录>\data\logs\`。请贴 `gui.log` / `bot.log` 里报错附近的内容。
+        如果程序弹了「出现异常」窗口，点「复制详情」把内容整段贴过来。
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: 相关配置（已脱敏）
+      description: 只贴相关片段，务必把 api_key / app_secret / openid 换成 `***`
+      render: yaml
+    validations:
+      required: false

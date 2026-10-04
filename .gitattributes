@@ -1,0 +1,18 @@
+# 统一换行符：cmd.exe 无法正确解析 LF 换行的 .bat/.cmd 文件
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 其余文本文件统一用 LF
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.qss text eol=lf
+*.spec text eol=lf
+
+# 二进制
+*.exe binary
+*.ico binary
+*.png binary
+*.db binary

@@ -1,0 +1,144 @@
+# ============================================================================
+# BaiAi-Tavern 配置文件
+# ----------------------------------------------------------------------------
+# 首次运行会自动复制为 data/config.yaml。
+# GUI 的“系统设置 / 主动消息”页面会读写同一个文件，也可直接编辑本文件。
+# 支持 ${ENV_VAR} 形式引用环境变量，例如：api_key: "${DEEPSEEK_API_KEY}"
+# 修改后 Bot 会在一分钟内自动热重载（也可在 GUI 点击“重载配置”）。
+#
+# QQ 接入方式只有一种：**QQ 官方机器人**（QQ 开放平台）。
+# 去 https://q.qq.com 创建机器人应用，拿到 AppID / AppSecret 填到 qq.official 即可，
+# 不需要小号、不违反用户协议。（旧版本配置里的 NapCat / OneBot 字段会在启动时自动清理）
+# ============================================================================
+
+app:
+  onboarding_done: false         # 是否已完成/跳过首次配置引导（想再看一次改成 false）
+  start_bot_on_launch: true      # 启动 GUI 时自动拉起 Bot 进程
+  minimize_to_tray: true         # 最小化时隐藏到托盘
+  close_to_tray: true            # 点击关闭按钮时最小化到托盘而不是退出
+  notify_on_proactive: true      # 主动消息发送后弹托盘气泡
+  notify_on_error: true          # 出错时弹托盘气泡
+  start_minimized: false         # 以托盘方式启动（配合开机自启）
+  autostart_with_windows: false  # 写入注册表 Run 项实现开机自启
+  theme: dark                    # dark / light
+
+llm:
+  base_url: "https://api.deepseek.com/v1"   # 兼容 OpenAI 协议的任意端点
+  api_key: ""                               # 必填，或写 "${DEEPSEEK_API_KEY}"
+  model: "deepseek-chat"
+  max_tokens: 500
+  temperature: 0.85
+  top_p: 1.0
+  timeout: 60                               # 单次请求超时（秒）
+  max_retries: 2                            # 失败重试次数（指数退避）
+  fallback_messages:                        # 所有重试都失败时使用的兜底话术
+    - "在忙吗？突然有点想你了。"
+    - "刚刚走神了一下，想起你了。"
+    - "嗨，今天过得怎么样？"
+
+qq:
+  # ============ 第 1 个机器人（多机器人里的第一个） ============
+  # 本段就是「机器人 1」的配置。想再加一个机器人：在 GUI 的「机器人」页面点
+  # 「＋ 新增机器人」，它会写到下面的 bots: 段（结构与本段完全相同）。
+  id: bot1                       # 唯一标识（内部使用，别和其他机器人重复）
+  name: "机器人 1"               # 只用于界面显示
+  enabled: true                  # 停用后不收发消息
+  character_id: ""               # 绑定角色（多机器人时指定“这个机器人用哪个角色”）
+  character_name: ""             # 绑定角色的名字（界面显示用，保存时自动写入）
+
+  # ------------------ QQ 官方机器人凭据 ------------------
+  official:
+    app_id: ""                   # 开放平台「机器人」页面里的 AppID
+    app_secret: ""               # 对应的 AppSecret（只保存在本机）
+    sandbox: false               # true 时走沙盒域名（sandbox.api.sgroup.qq.com）
+    intents: 33554432            # 1<<25 = 群聊与单聊事件；要收频道消息再加 1<<9 / 1<<12
+    api_domain: "https://api.sgroup.qq.com"
+    token_url: "https://api.bot.qq.com/app/getAppAccessToken"
+    gateway_path: "/gateway"
+    target_openid: ""            # 主动消息发给谁；留空则自动记住第一个私聊你的用户
+    group_openid: ""             # 主动消息发到哪个群（可选，填了就优先发群）
+    allow_all_users: true        # 是否响应所有私聊用户；false 时只看 allowed_users
+    allowed_users: []            # openid 白名单
+    allowed_groups: []           # 群 openid 白名单，留空表示不限
+    markdown: false              # 使用 markdown 消息（需要平台权限，msg_type=2）
+    max_reply_segments: 3        # 长回复最多拆成几条
+    reply_segment_max_len: 200   # 每条最长字数
+
+  user_nickname: "你"            # 提示词里 {{user}} 的替换内容
+  reply_enabled: true            # 是否自动回复私聊消息
+  group_reply_enabled: false     # 是否响应群聊里对机器人的 @
+
+# ------------------------- 第 2..N 个机器人 -------------------------
+# 每一项与上面的 qq: 段同构（各自一套 AppID / AppSecret 与主动消息目标）。
+# 每个机器人可以绑定一个角色，于是同一程序可以同时扮演多个「机器人 + 角色」。
+# GUI 的「机器人」页面会自动维护本段，通常不需要手写。
+bots: []
+# 例如：
+# bots:
+#   - id: bot2
+#     name: "第二个机器人"
+#     enabled: true
+#     character_id: "abc123def456" # 角色 id（在 data/characters 或角色管理页面看到）
+#     character_name: "苏苏"
+#     official:
+#       app_id: "102xxxxx"
+#       app_secret: "xxxxxxxx"
+
+proactive:                       # ---------------- 主动消息 ----------------
+  enabled: true
+  # 定时触发
+  scheduled_enabled: true
+  scheduled_times:
+    - "09:00"
+    - "21:00"
+  # 空闲触发：用户超过 N 小时未发言
+  idle_enabled: true
+  idle_hours: 6
+  idle_check_interval_minutes: 15
+  # 随机间隔触发：活跃时段内随机时间点
+  random_enabled: false
+  random_min_interval_minutes: 120
+  random_max_interval_minutes: 300
+  # 活跃时段（只在此时间段内触发）与免打扰时段
+  active_hours:
+    enabled: true
+    start: "08:00"
+    end: "23:00"
+  dnd_hours:
+    enabled: true
+    start: "23:00"
+    end: "08:00"
+  # 频率限制
+  global_daily_limit: 10         # 全局每日上限
+  per_character_daily_limit: 3   # 单角色每日上限
+  min_interval_minutes: 30       # 两次主动消息的最小间隔
+  # 行为开关
+  probability: 0.7               # 满足条件后真正发送的概率（0-1）
+  avoid_repeat: true             # 避免连续由同一角色发言
+  max_message_chars: 120         # 主动消息长度上限
+  context_messages: 8            # 生成时携带的最近对话条数
+  include_memory: true           # 是否携带长期记忆
+
+memory:
+  short_term_max: 20             # 短期记忆（对话上下文）保留条数
+  long_term_retrieve: 5          # 每次生成时检索的长期记忆条数
+  long_term_enabled: true
+  auto_extract: true             # 自动从对话中抽取长期记忆条目
+
+database:
+  path: "bot.db"                 # 相对路径基于数据目录（默认 <程序目录>/data）
+
+characters:
+  path: "characters"             # 角色卡目录（相对数据目录），也可填绝对路径
+  import_builtin: true           # 角色池为空时自动导入内置角色
+
+api:                             # GUI 与 Bot 之间的控制接口
+  host: "127.0.0.1"
+  port: 8765
+  token: ""                      # 非空时 GUI 请求需携带 X-Tavern-Token
+
+logging:
+  level: INFO                    # DEBUG / INFO / WARNING / ERROR
+  max_bytes: 2097152
+  backup_count: 3
+  console: true                  # Bot 进程是否把日志打到控制台（打包后建议 false）

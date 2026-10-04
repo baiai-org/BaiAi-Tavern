@@ -1,0 +1,26 @@
+BaiAi-Tavern
+Copyright 2026 baiai.org
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+它使用了以下开源项目（完整清单也可在程序内「关于」窗口查看）：
+
+  - Python                     https://www.python.org/
+  - PySide6 / Qt for Python    https://doc.qt.io/qtforpython/    (LGPLv3)
+  - FastAPI                    https://fastapi.tiangolo.com/     (MIT)
+  - Uvicorn                    https://www.uvicorn.org/          (BSD-3-Clause)
+  - APScheduler                https://apscheduler.readthedocs.io/ (MIT)
+  - aiosqlite                  https://github.com/omnilib/aiosqlite (MIT)
+  - httpx                      https://www.python-httpx.org/     (BSD-3-Clause)
+  - websockets                 https://websockets.readthedocs.io/ (BSD-3-Clause)
+  - OpenAI Python SDK          https://github.com/openai/openai-python (Apache-2.0)
+  - PyYAML                     https://pyyaml.org/               (MIT)
+  - Pillow                     https://python-pillow.org/        (MIT-CMU)
+  - PyInstaller                https://pyinstaller.org/          (GPL-2.0 with exception)
+  - Tkinter / Tcl-Tk           https://docs.python.org/3/library/tkinter.html (PSF / BSD-style)
+
+打包分发的 exe 由 PyInstaller 生成；PyInstaller 的 GPL 例外条款允许对本程序
+（非 GPL 作品）进行打包与分发。PySide6/Qt 以 LGPLv3 动态链接方式使用。
+
+角色卡格式兼容 SillyTavern（https://github.com/SillyTavern/SillyTavern，AGPL-3.0）：
+本项目只实现对该格式的读取，不包含 SillyTavern 的任何代码。

@@ -1,0 +1,30 @@
+# BaiAi-Tavern - 运行依赖
+# Python >= 3.10 推荐（3.9 亦可运行，代码保持 3.9 兼容）
+#
+# 接入方式只有「QQ 官方机器人」（QQ 开放平台）：AppID + AppSecret → access_token → WebSocket 网关，
+# 不需要任何第三方 QQ 协议组件。
+
+# ---- GUI ----
+PySide6>=6.6,<7
+
+# ---- 控制接口（本机 HTTP/WebSocket：GUI 与 Bot 进程之间）----
+fastapi>=0.110
+uvicorn>=0.27
+httpx>=0.27
+python-multipart>=0.0.9
+websockets>=12.0
+
+# ---- 调度 ----
+APScheduler>=3.10,<4
+tzlocal>=5.0
+
+# ---- LLM ----
+openai>=1.30
+
+# ---- 数据 / 资源 ----
+aiosqlite>=0.19
+PyYAML>=6.0
+Pillow>=10.0
+
+# ---- 打包（可选，构建时才需要）----
+pyinstaller>=6.5

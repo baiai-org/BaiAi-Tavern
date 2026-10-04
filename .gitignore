@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+*.manifest
+
+# ---- PyInstaller ----
+*.spec.bak
+
+# ---- 用户数据（不要提交自己的配置与数据库）----
+data/
+config.yaml
+config.yaml.bak
+
+# ---- 日志与缓存 ----
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini

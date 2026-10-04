@@ -1,0 +1,37 @@
+name: 功能建议
+description: 提出一个新功能或改进想法
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 描述使用场景与痛点，而不是直接给实现方案
+      placeholder: "我希望机器人能……因为……"
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你设想的方案（可选）
+      description: 如果你已经想过怎么做，可以写在这里
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 涉及范围（可多选）
+      options:
+        - label: 界面（布局 / 交互 / 文案）
+        - label: 角色与提示词
+        - label: 主动消息策略
+        - label: QQ 官方机器人通道
+        - label: 安装 / 打包 / 升级
+        - label: 文档
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        > 请注意：本项目**只支持 QQ 官方机器人**接入。第三方协议（NapCat / OneBot 等）
+        > 相关的功能请求不会再被接受（历史版本支持过，现已完整移除，原因见 README）。
