@@ -42,7 +42,7 @@ xcopy /e /i /y "resources" "build\payload\resources" >nul
 
 echo [4/5] 打包安装程序（内部携带 payload，体积较大请耐心等待）...
 rem 先删掉上一次的产物：被安全软件短暂占用时，PyInstaller 更新 PE 校验和会失败
-if exist "dist\BaiAi-Tavern V0.2.exe" del /f /q "dist\BaiAi-Tavern V0.2.exe"
+if exist "dist\BaiAi-Tavern V0.2.1.exe" del /f /q "dist\BaiAi-Tavern V0.2.1.exe"
 "%PY%" -m PyInstaller --noconfirm --clean pyinstaller_installer.spec
 if errorlevel 1 (
     echo.
@@ -50,7 +50,7 @@ if errorlevel 1 (
     echo        导致 PyInstaller 无法更新 PE 校验和（PermissionError / 拒绝访问）。
     echo        这里等 5 秒后自动重试一次 ...
     ping -n 6 127.0.0.1 >nul
-    if exist "dist\BaiAi-Tavern V0.2.exe" del /f /q "dist\BaiAi-Tavern V0.2.exe"
+    if exist "dist\BaiAi-Tavern V0.2.1.exe" del /f /q "dist\BaiAi-Tavern V0.2.1.exe"
     "%PY%" -m PyInstaller --noconfirm pyinstaller_installer.spec
     if errorlevel 1 (
         echo [错误] 安装程序打包失败，请把杀毒软件对本项目目录的实时扫描关掉后重试。
@@ -60,15 +60,15 @@ if errorlevel 1 (
 )
 
 echo [5/5] 检查产物 ...
-if not exist "dist\BaiAi-Tavern V0.2.exe" (
-    echo [错误] 没找到 dist\BaiAi-Tavern V0.2.exe，请查看上面的打包日志。
+if not exist "dist\BaiAi-Tavern V0.2.1.exe" (
+    echo [错误] 没找到 dist\BaiAi-Tavern V0.2.1.exe，请查看上面的打包日志。
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================
-echo   安装包：dist\BaiAi-Tavern V0.2.exe（单个文件，安装/卸载都在里面）
+echo   安装包：dist\BaiAi-Tavern V0.2.1.exe（单个文件，安装/卸载都在里面）
 echo   绿色版：dist\BaiAi-Tavern\（可直接启动，无需安装）
 echo.
 echo   安装后：桌面图标 + 开始菜单 + 「Windows 设置 → 应用」里的卸载项；

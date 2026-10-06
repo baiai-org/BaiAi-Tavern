@@ -1,4 +1,18 @@
 # 更新记录
+## V0.2.1（补丁版）
+
+V0.2 的退出路径修复，功能与配置无变化；V0.2 用户启动时会自动收到更新提醒。
+
+* **修复「自检 GUI 段全过、进程却以退出码 1 结束」（V0.2 发布后 CI 首跑即红）双层根因**：
+  * bot 侧：`/ws/events` 处理器只发不收，uvicorn 关闭时后台任务永久阻塞，bot 卡死在
+    「Waiting for background tasks to complete」（现并发监视对端断开，另加
+    `timeout_graceful_shutdown=8` 兜底，bot 退出更快更干净）；
+  * GUI 侧：事件流（EventStream）在 bot 慢退期间处于重连退避，`stop()` 只等 3 秒就
+    销毁 QThread 对象，Qt failfast（0xC0000409）无声杀进程（现 `stop()` 等到线程
+    真正结束、退避上限 5 秒）。
+* 自检新增断言：bot 在 `/api/shutdown` 后 15 秒内必须退出，否则该项直接 FAIL，
+  不再无声强杀。开发环境 681 项 / 打包后 719 项全部通过，CI 全绿。
+
 
 ## V0.2（多模态）
 

@@ -14,7 +14,7 @@
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
 | 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，共 **681 项**（开发环境；打包后 **719 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
 | 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
-| 当前版本 | V0.2（多模态），已合入 `main` 并公开（tag `v0.2`）；Release 资产上传后生效自动更新 |
+| 当前版本 | V0.2.1（= V0.2 + 退出路径修复），`main` / tag `v0.2.1` / Release `v0.2.1` 均已发布；V0.2 用户启动时自动提醒更新 |
 | 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
 
 ---
@@ -89,8 +89,8 @@
 | 仓库 | <https://github.com/baiai-org/BaiAi-Tavern>（public，默认分支 `main`） |
 | 协议 | Apache-2.0（`LICENSE`，第三方清单见 `NOTICE`） |
 | CI | `.github/workflows/ci.yml`（Windows runner：pyflakes + 6 套自检；`workflow_dispatch` 时额外打包并跑 frozen 自检） |
-| 发布 | `main` = V0.2（tag `v0.2`）；线上 Release v0.1（`BaiAi-Tavern-V0.1.exe` 72.9MB + `SHA256SUMS.txt`）为历史版本；**V0.2 Release 资产待上传** |
-| 产物 | `dist\BaiAi-Tavern V0.2.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
+| 发布 | `main` = V0.2.1（tag `v0.2.1`）；线上 Releases：`v0.2.1`（当前）/ `v0.2` / `v0.1`（历史），均含安装包 + `SHA256SUMS.txt` |
+| 产物 | `dist\BaiAi-Tavern V0.2.1.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
 | 图标 | 全部由 `scripts/make_icons.py` + `app/uikit.py` 绘制，`resources/icons/*.ico` 是产物 |
 
 **发新版本流程**
@@ -269,7 +269,7 @@ scripts\start.bat
 
 :: 打包
 scripts\build.bat            :: dist\BaiAi-Tavern.exe + dist\bot.exe（带版本资源）
-scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.exe（组装 payload → 单文件安装包）
+scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.1.exe（组装 payload → 单文件安装包）
 ```
 
 > ⚠️ PATH 上的 `python` 可能是 Windows Store 版 3.9，**永远用 `.venv\Scripts\python.exe`**。

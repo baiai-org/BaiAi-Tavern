@@ -7,7 +7,7 @@
 检查内容：
 
 * 主窗口与八个页面能正常构建，左下角「关于」按钮在导航下方；
-* 「关于」窗口显示名称 / V0.2 / baiai.org，开源清单按 1. 2. 3. 编号并带链接；
+* 「关于」窗口显示名称 / V0.2.1 / baiai.org，开源清单按 1. 2. 3. 编号并带链接；
 * 状态轮询把 Bot 状态推送到界面（仪表盘卡片、状态栏、侧边栏）；
 * 图标全部是 QPainter 绘制或由 UI 资源生成，不依赖 emoji 字形；
 * 每个页面的文字排版都没有被裁切；
@@ -557,8 +557,8 @@ def main() -> int:
                     child.text() for child in dialog.findChildren(QLabel) if hasattr(child, "text")
                 )
                 checker.check(
-                    "关于窗口显示名称 / 版本 V0.2 / 作者 baiai.org",
-                    "BaiAi-Tavern" in body and "V0.2" in body and "baiai.org" in body,
+                    "关于窗口显示名称 / 版本 V0.2.1 / 作者 baiai.org",
+                    "BaiAi-Tavern" in body and "V0.2.1" in body and "baiai.org" in body,
                     body[:200],
                 )
                 checker.check(
@@ -602,7 +602,7 @@ def main() -> int:
             "release": {"tag_name": "v0.3", "body": "- 新增更新系统\n- 一些修复"},
             "latest_tag": "v0.3",
             "latest_display": "V0.3",
-            "current_display": "V0.2",
+            "current_display": "V0.2.1",
             "newer": True,
             "asset": {"name": "BaiAi-Tavern-V0.3.exe", "browser_download_url": "http://127.0.0.1:1/x.exe"},
             "sums_asset": None,

@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 OUTPUT_DIR = ROOT / "build"
-VERSION_TUPLE = (0, 2, 0, 0)  # 供 Windows 文件版本使用（V0.2）
+VERSION_TUPLE = (0, 2, 1, 0)  # 供 Windows 文件版本使用（V0.2.1）
 FILE_VERSION = "%d.%d.%d.%d" % VERSION_TUPLE
 
 TEMPLATE = """# UTF-8 编码，由 scripts/make_version_info.py 生成，请勿手工修改。

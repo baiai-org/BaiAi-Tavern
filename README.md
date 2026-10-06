@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4.svg)](#)
 
-**版本 V0.2　·　作者 [baiai.org](https://baiai.org) QQ:951424960 微信:BH8GYP　·　协议 [Apache-2.0](LICENSE)**
+**版本 V0.2.1　·　作者 [baiai.org](https://baiai.org) QQ:951424960 微信:BH8GYP　·　协议 [Apache-2.0](LICENSE)**
 
 带图形界面的 **QQ 多角色 AI 主动消息桌面应用**。
 
@@ -62,8 +62,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| `BaiAi-Tavern-V0.2.exe` | Windows 安装包（约 77MB，单文件，安装 + 卸载都在里面） |
-| `SHA256SUMS.txt` | 校验值，下载后可自行核对：`certutil -hashfile "BaiAi-Tavern-V0.2.exe" SHA256` |
+| `BaiAi-Tavern-V0.2.1.exe` | Windows 安装包（约 77MB，单文件，安装 + 卸载都在里面） |
+| `BaiAi-Tavern-V0.2.exe` | 上一版（2026-10-06 首次发布） |
+| `SHA256SUMS.txt` | 校验值，下载后可自行核对：`certutil -hashfile "BaiAi-Tavern-V0.2.1.exe" SHA256` |
 
 * **安装**：双击 → 选择安装位置（默认 `%LOCALAPPDATA%\Programs\BaiAi-Tavern`，
   按用户安装、不需要管理员权限）→ 勾选是否创建桌面 / 开始菜单快捷方式 → 完成。

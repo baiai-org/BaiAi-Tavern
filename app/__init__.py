@@ -5,7 +5,7 @@ GUI 进程只负责界面与进程编排，不直接访问数据库：
 """
 
 __version__ = "0.2"
-APP_VERSION_DISPLAY = "V0.2"
+APP_VERSION_DISPLAY = "V0.2.1"
 APP_NAME = "BaiAi-Tavern"
 APP_DISPLAY_NAME = "BaiAi-Tavern"
 APP_AUTHOR = "baiai.org"
