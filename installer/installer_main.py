@@ -4,8 +4,8 @@
 
 * 双击运行 = 图形向导：未安装时是「安装」，已安装时显示已安装版本并提供
   「重新安装 / 卸载」；
-* 自动化安装：``BaiAi-Tavern V0.1.exe --silent --dir "D:\\Apps\\BaiAi-Tavern" --no-run``；
-* 自动化卸载：``BaiAi-Tavern V0.1.exe --silent --uninstall [--remove-data]``。
+* 自动化安装：``BaiAi-Tavern V0.2.exe --silent --dir "D:\\Apps\\BaiAi-Tavern" --no-run``；
+* 自动化卸载：``BaiAi-Tavern V0.2.exe --silent --uninstall [--remove-data]``。
 
 安装后「Windows 设置 → 应用」里的卸载项指向安装目录里的主程序
 （``BaiAi-Tavern.exe --uninstall``），所以不需要单独发布卸载 EXE。

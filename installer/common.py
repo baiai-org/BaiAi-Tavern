@@ -2,7 +2,7 @@
 
 设计
 ----
-* **只有一个 EXE**：``BaiAi-Tavern V0.1.exe`` 既是安装程序，也负责卸载 ——
+* **只有一个 EXE**：``BaiAi-Tavern V0.2.exe`` 既是安装程序，也负责卸载 ——
   安装后在「Windows 设置 → 应用」里点卸载，或再次运行安装程序选择「卸载」都能卸干净；
 * 默认安装到 ``%LOCALAPPDATA%\\Programs\\BaiAi-Tavern``（按用户安装，不需要管理员权限）；
 * 桌面与开始菜单快捷方式默认都创建，可在安装界面取消；
@@ -716,7 +716,7 @@ def is_installed(reg_path: str = REG_PATH) -> bool:
 
 
 def installed_info(reg_path: str = REG_PATH) -> Dict[str, Any]:
-    """已安装时的信息（安装向导用来显示「已安装 V0.1」并提供卸载）。"""
+    """已安装时的信息（安装向导用来显示「已安装 V0.2」并提供卸载）。"""
     entry = read_uninstall_entry(reg_path)
     if not entry:
         return {}

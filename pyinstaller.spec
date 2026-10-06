@@ -41,7 +41,7 @@ excludes = [
 icon_path = os.path.join(ROOT, "resources", "icons", "app.ico")
 icon = icon_path if os.path.exists(icon_path) else None
 
-# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.1 / 作者），由 scripts/make_version_info.py 生成
+# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.2 / 作者），由 scripts/make_version_info.py 生成
 version_path = os.path.join(ROOT, "build", "version_info_gui.txt")
 version = version_path if os.path.exists(version_path) else None
 

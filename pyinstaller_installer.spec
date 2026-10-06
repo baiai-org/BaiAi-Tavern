@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置：安装程序（BaiAi-Tavern V0.1.exe）。
+"""PyInstaller 打包配置：安装程序（BaiAi-Tavern V0.2.exe）。
 
 **只有一个 EXE**：既是安装程序也是卸载入口（安装后在「设置 → 应用」里卸载时，
 调用的是安装目录里的 ``BaiAi-Tavern.exe --uninstall``）。
@@ -35,7 +35,7 @@ excludes = [
 icon_path = os.path.join(ROOT, "resources", "icons", "app.ico")
 icon = icon_path if os.path.exists(icon_path) else None
 
-# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.1 / 作者），由 scripts/make_version_info.py 生成
+# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.2 / 作者），由 scripts/make_version_info.py 生成
 version_path = os.path.join(ROOT, "build", "version_info_installer.txt")
 version = version_path if os.path.exists(version_path) else None
 

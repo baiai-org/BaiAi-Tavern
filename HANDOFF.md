@@ -14,7 +14,7 @@
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
 | 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，共 **681 项**（开发环境；打包后 **719 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
 | 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
-| 当前版本 | V0.2（多模态开发版，worktree `D:\AI\DeepSeek\BaiAi-V0.2` 分支 `v0.2`，待用户真实 QQ 验证后打包/发布；线上仍是 V0.1） |
+| 当前版本 | V0.2（多模态），已合入 `main` 并公开（tag `v0.2`）；Release 资产上传后生效自动更新 |
 | 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
 
 ---
@@ -78,7 +78,7 @@
 - 接入方式**只有 QQ 官方机器人**（AppID / AppSecret）。历史上支持过 NapCat / OneBot，**已完整移除**：相关代码、界面、下载器、安装包内容都删了，老配置里的遗留键会在 `ConfigManager.load()` 时自动清理并写出 `config.yaml.bak`。
 - 多机器人 + 多角色：每个机器人一套官方凭据，绑定一个角色，互不串台。
 - 安装包：**单个 EXE**（安装 / 重新安装 / 卸载合一），按用户安装到 `%LOCALAPPDATA%\Programs\BaiAi-Tavern`，不需要管理员权限；卸载默认保留 `data/`（配置 + 聊天记录）。
-- 已开源公开：<https://github.com/baiai-org/BaiAi-Tavern>（Apache-2.0），线上 Release 仍是 `v0.1`（附安装包与 `SHA256SUMS.txt`）；V0.2 待验证后打包发布。
+- 已开源公开：<https://github.com/baiai-org/BaiAi-Tavern>（Apache-2.0）。`main` 已是 V0.2（tag `v0.2`），Releases 已有 v0.1 历史版本，V0.2 的 Release 资产（安装包 + SHA256SUMS.txt）上传后自动更新即可生效。
 
 ---
 
@@ -89,7 +89,7 @@
 | 仓库 | <https://github.com/baiai-org/BaiAi-Tavern>（public，默认分支 `main`） |
 | 协议 | Apache-2.0（`LICENSE`，第三方清单见 `NOTICE`） |
 | CI | `.github/workflows/ci.yml`（Windows runner：pyflakes + 6 套自检；`workflow_dispatch` 时额外打包并跑 frozen 自检） |
-| 发布 | 线上 Release `v0.1`，附件 `BaiAi-Tavern-V0.1.exe`（72.9MB）+ `SHA256SUMS.txt`；**V0.2 待用户真机验证后打包发 `v0.2`** |
+| 发布 | `main` = V0.2（tag `v0.2`）；线上 Release v0.1（`BaiAi-Tavern-V0.1.exe` 72.9MB + `SHA256SUMS.txt`）为历史版本；**V0.2 Release 资产待上传** |
 | 产物 | `dist\BaiAi-Tavern V0.2.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
 | 图标 | 全部由 `scripts/make_icons.py` + `app/uikit.py` 绘制，`resources/icons/*.ico` 是产物 |
 
@@ -104,8 +104,8 @@ scripts\build_installer.bat  :: 组装 build\payload → dist\BaiAi-Tavern V0.x.
 :: 4) 提交 + 打标签 + 建 Release，把 dist\BaiAi-Tavern V0.x.exe 作为附件上传
 ```
 
-> Release 附件名**不要带空格**：GitHub 会把空格替换成点（`BaiAi-Tavern V0.1.exe` → `BaiAi-Tavern.V0.1.exe`），
-> 所以对外统一用 `BaiAi-Tavern-V0.1.exe`，本地 `dist\` 里的文件名可保持带空格。
+> Release 附件名**不要带空格**：GitHub 会把空格替换成点（`BaiAi-Tavern V0.2.exe` → `BaiAi-Tavern.V0.2.exe`），
+> 所以对外统一用 `BaiAi-Tavern-V0.2.exe`，本地 `dist\` 里的文件名可保持带空格。
 > 上传 Release 需要 token 具备 `Contents: write`（classic token 需 `repo` + `workflow`）；
 > **不要把 token 写进任何文件**，用完立即 Revoke。
 >
@@ -269,7 +269,7 @@ scripts\start.bat
 
 :: 打包
 scripts\build.bat            :: dist\BaiAi-Tavern.exe + dist\bot.exe（带版本资源）
-scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 单文件安装包）
+scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.exe（组装 payload → 单文件安装包）
 ```
 
 > ⚠️ PATH 上的 `python` 可能是 Windows Store 版 3.9，**永远用 `.venv\Scripts\python.exe`**。
@@ -467,8 +467,8 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 
       兼容层崩在 "Unhandled generated data mime type: image/jpeg"。
       所以程序策略：`gemini-native` 引擎原生优先、chat/modalities 兜底（modalities 小写→大写自动重试）；
       openai 引擎走 `/images/generations`（参数降级重试）→ chat 兜底。
-    - 实测产物留档：worktree 根目录 `gemini_native_2.5_flash_image_实测.png`、
-      `gemini_兼容层_3pro_image_preview_实测.png`。
+    - 实测产物留档：`extras/samples/gemini_native_2.5_flash_image_实测.png`、
+      `extras/samples/gemini_兼容层_3pro_image_preview_实测.png`（生图实测输出样例）。
 30. **QQ 官方附件消息的语音字段（C2C_MESSAGE_CREATE，官方文档核对过）**：
     平台 `MessageAttachment` 对语音消息有三个关键字段：
     - `asr_refer_text`：QQ/腾讯内置 ASR 的参考转写，免费——**这就是产品用的转写**
