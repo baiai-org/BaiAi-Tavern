@@ -25,6 +25,8 @@ class ShortTermMemory:
         role: str,
         content: str,
         is_proactive: bool = False,
+        kind: str = "text",
+        media_path: str = "",
     ) -> int:
         if role not in ("user", "assistant", "system"):
             role = "user"
@@ -32,7 +34,13 @@ class ShortTermMemory:
         if not content:
             return 0
         return await crud.add_message(
-            self.db, character_id, role, content, is_proactive=is_proactive
+            self.db,
+            character_id,
+            role,
+            content,
+            is_proactive=is_proactive,
+            kind=kind,
+            media_path=media_path,
         )
 
     async def history(

@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4.svg)](#)
 
-**版本 V0.1　·　作者 [baiai.org](https://baiai.org) QQ:951424960 微信:BH8GYP　·　协议 [Apache-2.0](LICENSE)**
+**版本 V0.2　·　作者 [baiai.org](https://baiai.org) QQ:951424960 微信:BH8GYP　·　协议 [Apache-2.0](LICENSE)**
 
 带图形界面的 **QQ 多角色 AI 主动消息桌面应用**。
 
@@ -20,10 +20,48 @@
 > 早期版本支持过的第三方协议组件（NapCat / OneBot）**已彻底移除**，旧配置里的相关字段会在首次
 > 启动时自动清理（原文件备份为 `config.yaml.bak`）。
 
+> ### 🚧 V0.2（多模态）开发中
+> 在「文字陪伴」之上，V0.2 让角色能**看、能发图、能听语音、能回语音**：
+> - **模型路由**：图像理解 / 图像生成 / 文字转语音三个能力**各走各家的 API**，
+>   界面里逐槽位填 Base URL / Key / 模型并可当场「测试线路」（按界面当前值测试，不用先保存）；
+>   每个槽位带**常用服务商预设**（主流服务商基本全覆盖：主模型 34 家、看图 13 家（含 DeepSeek 官方 deepseek-flash 看图）、
+>   生图 14 家、文字转语音 7 家，
+>   选一下自动填好地址与候选模型）和**「获取模型列表」**
+>   （从上游拉真实模型清单，点选即填），与「系统设置 → LLM」体验一致；
+>   **主模型（文字对话）统一在「系统设置 → LLM」配置**。
+>   生图对参数挑剔的端点（如 Gemini 的 OpenAI 兼容层 / nano banana）会**自动降级参数重试**，不用手动迁就；
+>   Gemini 新一代图像模型（nano banana 2 系列）另备**原生接口**引擎，一键预设即用。
+> - **看图 + 发图**：你在 QQ 发图片，角色真正"看见"后回复；回复末尾写 `[IMG] 描述` 即自动画一张发给你。
+> - **双向语音**：你发语音，QQ 官方平台随消息推送的参考转写直接给角色听（**零配置、不用配任何线路**）；
+>   角色按概率把整条回复改成语音发回来（默认 10%，可调）。
+> - **TTS 三种引擎（默认推荐阿里云百炼）**：**阿里云百炼 DashScope**（默认，
+>   三族模型、各配各的音色——百炼 TTS 不是 OpenAI 兼容协议，程序按模型名自动路由到
+>   正确端点，**默认已填好 qwen-audio-3.1-tts-flash + yuxiaoyun_v3.1，只需粘贴 API Key**）：
+>   Qwen3-TTS（`qwen3-tts-flash` 等，音色 Cherry/Ethan…；`qwen3-tts-instruct-flash`
+>   自动启用**指令风格**：内置 SKILL 让主模型按百炼官方格式结合角色人设与语境生成
+>   「怎么读」的指令再合成——语气不再平，安慰就温柔、调侃就俏皮、提问自动上扬）、
+>   CosyVoice（`cosyvoice-v3-flash` 等，音色 longanyang…）、Qwen-Audio-TTS
+>   （`qwen-audio-3.1-tts-flash` 等，音色 yuxiaoyun_v3.1…，音色列表内置三族；
+>   自动启用**情感与拟声标签 + 整体语气指令**双机制：主模型按语境在文本里嵌入百炼
+>   官方标签——耳语 / 大笑 / 叹息 / 愤怒 / 哭泣等情感与拟声效果（句内可切换、逐句覆盖），
+>   并同步生成语气指令；主模型不可用时本地规则兜底，保证每次都带调教参数；
+>   另支持官方**语速 / 音调 / 音量**参数，在音色调节里设置自动映射 rate/pitch/volume）。
+>   也可切换 edge-tts（在线免费 300+ 音色，无需 Key）/ OpenAI 兼容 `/audio/speech`
+>   （MiniMax / ElevenLabs 等）。
+> - **每个角色独立音色与头像**（角色管理里点「音色」按钮：edge-tts 全量音色 300+，中文在前，
+>   按角色调节语速 / 音调 / 音量 / 语速倍率，试听每次随机换一句文案；点角色头像可换成自己的图片，
+>   导入的角色卡自带人物图像时自动用作头像）。
+> - 任何媒体能力失败都会**优雅降级回纯文字**，聊天不会被打断。
+> - **自动更新**：启动时自动检查 GitHub Releases 是否有新版（6 小时限流，不弹窗打扰），
+>   发现新版会提醒，可选**立即更新 / 跳过此版本 / 不再提示 / 稍后再说**；
+>   主窗口左下角「安装与更新」可手动检查、看安装信息、重装修复、卸载。
+>   更新过程带下载进度条与 SHA256 校验，装完自动重启为新版，配置与数据保留。
+> 验证发布后，Releases 会提供 V0.2 安装包；源码开发方式见下。
+
 ```
 ┌───────────────────────────────────────────────────────────┐
 │  BaiAi-Tavern.exe（PySide6 界面 + 系统托盘）                │
-│     仪表盘 · 机器人 · 角色管理 · 主动消息 · 对话查看 · 设置 · 日志 │
+│     仪表盘 · 机器人 · 角色管理 · 模型路由 · 主动消息 · 对话查看 · 设置 · 日志 │
 │                                            （左下角：关于）  │
 └───────────────┬───────────────────────────────────────────┘
                 │ 本机 HTTP API (127.0.0.1:8765) + WebSocket 事件推送
@@ -54,6 +92,12 @@
 → 勾选是否创建桌面/开始菜单快捷方式 → 完成。卸载在「Windows 设置 → 应用」里，
 或在开始菜单里再次运行安装包选「卸载」；**卸载默认保留你的配置与聊天记录**。
 
+**自动更新（V0.2 起）**：程序启动后会在后台检查 GitHub Releases 是否有新版（每 6 小时最多查一次，
+不弹窗打扰）。发现新版时提醒，可选**立即更新 / 跳过此版本 / 不再提示 / 稍后再说**；
+更新会下载新安装包（带进度条与 SHA256 校验）静默装到原位置，装完自动重启为新版，
+配置与聊天记录保留。主窗口左下角**「安装与更新」**可手动检查更新、查看安装信息、
+重装修复或卸载；「不再提示」后手动检查依然可用。
+
 > 系统要求：Windows 10 / 11（64 位）。无需安装 Python 或其它运行库。
 > 首次运行会弹出 6 步配置引导，准备好「LLM 接口的 API Key」和「QQ 官方机器人的 AppID/AppSecret」即可。
 
@@ -71,9 +115,9 @@ scripts\start.bat
 ```
 
 启动后界面会自动拉起 Bot 进程，并在系统托盘常驻。窗口默认按屏幕自适应（不小于 1160×760），
-左侧依次是**仪表盘 / 机器人 / 角色管理 / 主动消息 / 对话查看 / 系统设置 / 日志**，
-左下角还有一枚**「关于」**按钮（点开可以看到版本 V0.1、作者 baiai.org，以及按 1. 2. 3. 编号列出的
-全部开源项目与主页链接）。
+左侧依次是**仪表盘 / 机器人 / 角色管理 / 模型路由 / 主动消息 / 对话查看 / 系统设置 / 日志**，
+左下角还有**「安装与更新」**（检查更新 / 安装信息 / 重装 / 卸载）与**「关于」**按钮
+（点开可以看到版本、作者 baiai.org，以及按 1. 2. 3. 编号列出的全部开源项目与主页链接）。
 
 **首次运行会自动弹出「配置引导」**，固定 6 步，跟着走一遍就能用：
 
@@ -211,7 +255,10 @@ scripts\build_installer.bat
   程序会把原因显示在「最近跳过原因」/日志里；
 * **必须保持程序运行**：官方要求机器人网关在线才能发消息；
 * **沙盒模式**：勾选后只对沙盒测试成员生效（域名切到 `sandbox.api.sgroup.qq.com`），适合先跑通流程；
-* 语音/图片消息目前只处理文本内容（官方富媒体接口未接入）。
+* 富媒体（V0.2）：图片消息会下载后经「图像理解」线路让角色真正看到内容再回复，
+  语音消息由 **QQ 官方平台随消息推送的参考转写**直接给角色听（零配置、不下载音频）；
+  角色可按概率回语音（TTS）、按 `[IMG]` 约定回图片。
+  相关线路与行为在「模型路由」页配置；任何线路未配置或失败时自动退回纯文字。
 
 常见错误码（程序会翻译成人话）：
 
@@ -277,16 +324,16 @@ openid 记忆、WebSocket 事件推送、界面各页面与控件、配置引导
 
 | 自检 | 结果 |
 |---|---|
-| `python -m tests.smoke_test` | **176 项全部通过**（86 单元 + 90 端到端） |
-| `python -m tests.official_smoke` | **54 项全部通过**（官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连） |
+| `python -m tests.smoke_test` | **267 项全部通过**（单元含模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / modalities 大小写兜底 / **chat 出图 content 数组格式兜底 / chat 出图多种返回形状兜底（顶层 data[] / 非标准键 / data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议（content 部件 image 键）/ 局域网私网地址不强制 API Key / 回复链路局域网端点 Key 留空判定（SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度 / 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图** / 测试线路表单值 / 服务商预设全覆盖 / **角色卡 Chub 风格（avatar 远程 URL 下载并魔数验证 / 非标准 extensions 不破坏解析 / 非图片头像不留垃圾字节 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 的 UTF-8 容错 / 报告卡片本身未写的核心字段）** / **提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）** / 入站语音平台参考转写（零配置、零下载）/ 角色级音色调节 / 头像上传 / [IMG] 句中识别 / TTS 风格参数 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / **百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / 两种返回分支 / 错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）** / **TTS 调教 SKILL（instruct 指令门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / Qwen-Audio 标签门控 / 官方语义提示词 / 标签逐句覆盖 / 标签+指令双输出解析 / 标签校验与近似拼写归一 / 编造中文标签剥除 / 本地兜底 / 思考类模型不限制思考长度）** / **TTS 缺省引擎为推荐引擎 dashscope 且引擎列表首位**） |
+| `python -m tests.official_smoke` | **73 项全部通过**（官方通道 + V0.2 富媒体：语音回复 / 图片理解（图片挂当前 user 消息）/ [IMG] 生图 / 语音参考转写进模型上下文且不下载音频） |
 | `python -m tests.multibot_smoke` | **38 项全部通过**（两个官方机器人 + 两个角色，互不串台） |
-| `python -m tests.gui_smoke` | **107 项全部通过**（含「关于」窗口、官方表单、七页裁切体检、超大 ID 回归） |
-| `python -m tests.onboarding_smoke` | **84 项全部通过**（固定 6 步配置引导） |
+| `python -m tests.gui_smoke` | **149 项全部通过**（含「关于」窗口、官方表单、八页裁切体检、**全页面宽度守卫（滚动内容不超视口，防页面偏移回归）**、超大 ID 回归、模型路由预设 / 获取模型列表 / 获取模型列表联动刷新音色 / 测试线路按表单值 / **视觉测试线路校验内置红色测试图 / 测试完成后按钮保持可用（焦点不串段）** / 生图双引擎 / TTS 音色调节与全量音色清单 / TTS 三引擎切换（百炼音色清单）/ 角色音色对话框（试听 + 角色级调节）/ 角色卡头像与音色按钮 / 角色编辑滚动条 / **编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 卡片展示页）不影响对话的说明** / 会话列表刷新跟回选中行 / 安装与更新一体窗口与启动更新提醒（mock GitHub）） |
+| `python -m tests.onboarding_smoke` | **88 项全部通过**（固定 6 步配置引导） |
 | `python -m tests.scheduler_live` | **14 项全部通过**（定时触发到点自动发送） |
-| `python -m tests.frozen_smoke` | **34 项全部通过**（打包产物；产物比源码旧时会自动跳过） |
-| `python -m tests.installer_smoke` | **41 项全部通过**（真实安装包安装 / 卸载 + 主程序自卸载 + 旧版本运行时升级） |
+| `python -m tests.frozen_smoke` | **34 项全部通过**（打包产物；未打包时自动跳过） |
+| `python -m tests.installer_smoke` | **59 项全部通过**（真实安装包安装 / 卸载 + 主程序自卸载 + 旧版本运行时升级 + 更新系统：版本比较 / SHA256 校验 / 下载进度 / 启动限流 / 静默拉起，本地模拟 GitHub；未打包时 52 项） |
 
-合计 **548 项**。测试代码与产品代码同步演进，发现真实缺陷会先修产品再补断言。
+合计 **681 项**（开发环境，未打包）/ **719 项**（打包后）。测试代码与产品代码同步演进，发现真实缺陷会先修产品再补断言。
 
 ---
 
@@ -301,6 +348,8 @@ openid 记忆、WebSocket 事件推送、界面各页面与控件、配置引导
 | `bots` | 同上结构 | 第 2..N 个机器人 |
 | `proactive` | `scheduled_times` / `idle_hours` / `random_*` / `active_hours` / `dnd_hours` / `global_daily_limit` / `min_interval_minutes` / `probability` | 主动消息触发与限流 |
 | `memory` | `short_term_max` / `long_term_retrieve` / `auto_extract` | 记忆系统 |
+| `providers`（V0.2） | `chat` / `vision` / `image` / `tts` 槽位，各含 `engine` / `base_url` / `api_key` / `model`（`tts` 另有 `voice` 与音色调节 `rate` / `pitch` / `volume` / `speed`） | **模型路由**：不同能力各走各家的 API。`chat`（主模型）统一读上面的 `llm` 段，本段仅作旧配置兜底；`tts` 引擎可选 `edge-tts`（在线免费，全量 300+ 音色）或 `openai`。语音转文字不占槽位（QQ 官方平台随消息推送参考转写，零配置；旧配置里遗留的 `providers.asr` 段启动时自动清理） |
+| `media`（V0.2） | `enabled` / `voice_reply_probability` / `allow_image` / `image_marker` / `voice_max_chars` / `temp_days` | 富媒体行为：语音回复概率 / 是否允许生图 / 生图标记 / 单条语音字数上限 / 临时文件保留天数 |
 | `api` | `host` / `port` / `token` | GUI ↔ Bot 的本机接口（`token` 非空时需带 `X-Tavern-Token`） |
 | `logging` | `level` / `max_bytes` / `backup_count` | 日志滚动 |
 
@@ -331,6 +380,8 @@ bai-ai-tavern/
 │   ├── main_window.py      # 主窗口：侧边栏 + 页面堆叠 + 状态栏 + 引导入口
 │   ├── onboarding.py       # 首次运行配置引导（固定 6 步，可跳过）
 │   ├── about.py            # 「关于」窗口：名称/版本/作者 + 引用的开源项目（1. 2. 3. 带链接）
+│   ├── lifecycle.py        # 「安装与更新」一体窗口 + 启动更新提醒（四出口）
+│   ├── updater.py          # 自动更新逻辑（不依赖 Qt）：GitHub Releases 检查 / 下载 / SHA256 / 静默安装
 │   ├── tray.py             # 系统托盘：图标状态、右键菜单、气泡通知
 │   ├── context.py          # 应用上下文：状态轮询、事件流、子进程编排
 │   ├── api_client.py       # 调用 Bot 的 HTTP 客户端
@@ -340,21 +391,22 @@ bai-ai-tavern/
 │   ├── icons.py / theme.py / uikit.py   # 图标绘制与深色主题
 │   ├── config_store.py     # 配置读写（写前合并磁盘变更）
 │   ├── autostart.py        # 开机自启（注册表）
-│   ├── pages/              # 仪表盘 / 机器人 / 角色管理 / 主动消息 / 对话 / 设置 / 日志
-│   └── widgets/            # 角色卡、状态灯、表单控件、LLM 配置控件、官方机器人配置控件
+│   ├── pages/              # 仪表盘 / 机器人 / 角色管理 / 模型路由 / 主动消息 / 对话 / 设置 / 日志
+│   └── widgets/            # 角色卡、状态灯、表单控件、LLM 配置控件、官方机器人配置控件、provider_form(模型路由槽位)
 ├── bot/                    # Bot 进程（FastAPI + APScheduler）
 │   ├── main.py             # 入口：FastAPI 应用 + uvicorn + 启动/关闭钩子
-│   ├── runtime.py          # 运行时容器（配置/数据库/引擎/多机器人/调度器）
+│   ├── runtime.py          # 运行时容器（配置/数据库/引擎/多机器人/调度器/富媒体中枢）
 │   ├── accounts.py         # BotAccount：一个官方机器人的网关、目标与绑定角色
 │   ├── chat_router.py      # 「收消息 → 选角色 → 生成 → 发送」链路
 │   ├── api.py              # 控制接口 /api/* 与 WebSocket /ws/events
 │   ├── database/           # models.py 建表、crud.py 数据访问
 │   ├── character_manager/  # loader.py 角色卡解析、registry.py 注册表
 │   ├── memory/             # short_term.py 对话上下文、long_term.py 记忆检索
-│   ├── ai_engine/          # prompt_builder.py 提示词、llm_client.py 调用、engine.py 编排
+│   ├── ai_engine/          # prompt_builder.py 提示词、llm_client.py 调用、engine.py 编排（含视觉理解）
+│   ├── media/              # V0.2 富媒体：store/voice(TTS)/images(生图+理解)/hub(收发编排)
 │   ├── scheduler/          # proactive.py 调度、triggers.py 触发规则
-│   └── qq_official/        # client.py 凭证/REST、gateway.py 网关、receiver.py 事件、messaging.py 发送层
-├── common/                 # GUI 与 Bot 共用：路径、配置、日志、文本、机器人配置解析
+│   └── qq_official/        # client.py 凭证/REST/富媒体上传、gateway.py 网关、receiver.py 事件、messaging.py 发送层
+├── common/                 # GUI 与 Bot 共用：路径、配置、日志、文本、机器人配置解析、providers(模型路由)
 ├── installer/              # 安装 / 卸载逻辑与向导（安装包 EXE 内部使用）
 ├── resources/              # 主题、图标、内置角色卡
 ├── scripts/                # build.bat / build_installer.bat / start.bat / 入口脚本 / 图标与版本信息生成
@@ -418,7 +470,8 @@ bai-ai-tavern/
 * 长期记忆采用关键词重叠加权检索（不引入向量库），以换取小体积与低内存占用。
 * 目前只提供深色主题。
 * 事件推送（WebSocket）用于即时通知，界面状态仍以 3 秒轮询为主，二者互为兜底。
-* 语音/图片等富媒体消息暂未接入，只处理文本。
+* 富媒体（V0.2）依赖各线路的 OpenAI 兼容实现，换厂商时请在「模型路由」页用「测试线路」逐个验证；
+  任何线路未配置或失败都会自动退回纯文字，不影响正常聊天。
 
 ---
 

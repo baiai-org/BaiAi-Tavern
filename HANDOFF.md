@@ -12,10 +12,10 @@
 | 这是什么 | Windows 桌面应用：让多个 AI 角色通过 **QQ 官方机器人** 主动给你发消息、并回复你的消息 |
 | 运行形态 | 两个进程：**GUI 进程**（PySide6，含托盘）+ **Bot 进程**（FastAPI + uvicorn + APScheduler），通过本机 HTTP/WS 通信 |
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
-| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，共 **548 项**；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
-| 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` |
-| 当前版本 | V0.1（公开内测），仓库已开源公开，CI 绿，Release 带安装包 |
-| 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数** 与 **PowerShell 批量改源码** |
+| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，共 **681 项**（开发环境；打包后 **719 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
+| 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
+| 当前版本 | V0.2（多模态开发版，worktree `D:\AI\DeepSeek\BaiAi-V0.2` 分支 `v0.2`，待用户真实 QQ 验证后打包/发布；线上仍是 V0.1） |
+| 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
 
 ---
 
@@ -23,12 +23,62 @@
 
 **做什么**：导入 SillyTavern 角色卡（PNG / JSON / YAML）→ 绑定到 QQ 官方机器人 → 角色在你说话时用对应人格回复，并在**定时 / 空闲 / 随机**三种策略下主动找你说话。所有参数都在 `config.yaml`，全部能通过界面改。
 
-**当前状态（V0.1）**
+**当前状态（V0.2，多模态）**
 
+- 在 V0.1「文字陪伴」之上，V0.2 让角色能**看、能发图、能听语音、能回语音**：
+  * **模型路由（不同能力走不同 API）**：新增「模型路由」页面，三个能力槽位独立配置
+    Base URL / API Key / 模型——图像理解 / 图像生成 / 文字转语音。
+    每个槽位带**服务商预设**（`app/provider_presets.py`，选中自动填 Base URL + 候选模型；
+    主流服务商全覆盖：主模型 34 家见 `app/llm_presets.py`，看图 13 / 生图 14 /
+    文字转语音 7 家）与
+    **「获取模型列表」**（从上游 `/models` 拉真实清单，点选即填；401/403 时自动换 `?key=` 重试），
+    交互同「系统设置 → LLM」；
+    **「测试线路」按表单当前值测试**（`/api/providers/test` 带 `values`，未保存也能测）。
+    **主模型（文字对话）统一在「系统设置 → LLM」段配置**，模型路由页不重复
+    （`load_slot("chat")` 以 `llm` 段为准，仅 llm 段未配置时回退 `providers.chat` 兼容老配置）。
+    **语音转文字不占槽位**：QQ 官方平台随语音消息事件直接推送参考转写
+    （`MessageAttachment.asr_refer_text`），零配置、不下载音频；平台没给时提示"角色暂时没听清"。
+    （V0.2 开发中曾做独立的 asr 槽位——本地 SenseVoice / 远程 `/audio/transcriptions`，
+    后确认真机零配置可听后整体移除；旧配置 `providers.asr` 段启动时自动清理。）
+    **图像生成有两种引擎**：`openai`（OpenAI 兼容 `/images/generations`，对参数挑剔的端点
+    自动降级参数重试：400 → 去掉 `size` → 再去掉 `response_format`，仍不行再改走 chat 出图）
+    或 `gemini-native`（Gemini 原生 `/models/{model}:generateContent`，支持全部 Gemini 图像模型，
+    含新一代 nano banana 2 系列——兼容层只支持个别模型，详见第 10 节坑 29）。
+  * **理解图片 + 发图**：QQ 发来的图片（单聊 / 群聊）经视觉线路理解后回复；
+    回复或主动消息末尾写 `[IMG] 描述`（角色自己决定）即自动生图发过去。
+  * **双向语音**：用户发语音，QQ 官方平台随消息推送的参考转写直接给角色听（零配置）；
+    角色按概率把整条回复改成语音发回（TTS，三种引擎：edge-tts / OpenAI 兼容 /
+    **阿里云百炼原生**——Qwen3-TTS / CosyVoice / Qwen-Audio 三族，端点按模型名自动路由、
+    音色按族内置候选，详见第 10 节坑 37；
+    选 `qwen3-tts-instruct-flash` 自动启用**指令风格**、选 `qwen-audio-3.1-tts-flash`
+    自动启用**情感与拟声标签**：内置 SKILL（`bot/media/instruct.py`）让主模型按百炼
+    官方格式/标签表结合角色人设与语境调教语音表现力，详见坑 38）。
+  * **每个角色独立音色与头像**：角色管理列表的「音色」按钮（`CharacterVoiceDialog`）可为单个角色
+    指定 `tts_voice` + 角色级音色调节（`tts_rate` / `tts_pitch` / `tts_volume` / `tts_speed`，
+    覆盖「模型路由」的全局调节，留空跟随全局，合成见 `MediaHub._tts_style(character)`）；
+    试听走 `/api/providers/test`（带 `values` 把当前调节叠上去）。点角色头像可自选图片替换
+    （`PUT /api/characters/{id}/avatar` → `registry.update_avatar`，文件存 `data/characters/avatars/`）；
+    导入角色卡自带人物图像时（PNG 卡整图 / JSON-YAML 的 base64 `avatar` 字段）自动用作头像。
+  * **富媒体行为可调**：语音回复概率 / 单条语音字数上限 / 临时文件保留天数，都在「模型路由」页，保存即热生效。
+  * **自动更新（V0.2）**：启动后后台检查 GitHub Releases 是否有新版（6 小时限流），
+    发现新版弹轻量提醒，四出口：**立即更新 / 跳过此版本 / 不再提示 / 稍后再说**。
+    更新 = 下载 Release 里的安装包（`%TEMP%\baiai-update\`，进度条）→ 有 `SHA256SUMS.txt`
+    时校验 → 静默装到当前安装目录（`installer.common` 会自动关掉旧版本进程）→ 自动启动新版。
+    安装 / 更新 / 卸载 / 关于合一界面：主窗口左下角「安装与更新」（`app/lifecycle.py`），
+    逻辑在 `app/updater.py`（不依赖 Qt，自检直接调用）。
+    策略存 `config.yaml` 的 `app.update_check_enabled` / `app.update_skipped_version` /
+    `app.update_last_check`。**发布新版时 Release 附件命名必须保持 `BaiAi-Tavern*.exe`
+    （+ `SHA256SUMS.txt`），自动更新靠这个规则挑安装包。**
+- 架构上：Bot 侧新增 `bot/media/` 包（`store` 落地 / `voice` TTS / `images` 生图+理解 / `hub` 收发编排），
+  `runtime.media` 持有 `MediaHub`；官方通道 `client.py` 增加富媒体上传（`msg_type=7` + `file_info`）与分片上传。
+  数据库升到 `SCHEMA_VERSION=6`（`characters.tts_voice` + 角色级音色调节 `tts_rate/tts_pitch/tts_volume/tts_speed`、
+  `messages.kind` / `messages.media_path`，旧库自动 `ALTER`）。
+- **降级不变量**：任何媒体能力失败（未配置线路 / 调用出错 / 上传失败）都必须优雅退回纯文字，绝不把聊天打断；
+  `send_outgoing` 里若文字 + 媒体都没发出去，会把正文再按纯文字发一遍保底。
 - 接入方式**只有 QQ 官方机器人**（AppID / AppSecret）。历史上支持过 NapCat / OneBot，**已完整移除**：相关代码、界面、下载器、安装包内容都删了，老配置里的遗留键会在 `ConfigManager.load()` 时自动清理并写出 `config.yaml.bak`。
 - 多机器人 + 多角色：每个机器人一套官方凭据，绑定一个角色，互不串台。
 - 安装包：**单个 EXE**（安装 / 重新安装 / 卸载合一），按用户安装到 `%LOCALAPPDATA%\Programs\BaiAi-Tavern`，不需要管理员权限；卸载默认保留 `data/`（配置 + 聊天记录）。
-- 已开源公开：<https://github.com/baiai-org/BaiAi-Tavern>（Apache-2.0），Release `v0.1` 附安装包与 `SHA256SUMS.txt`。
+- 已开源公开：<https://github.com/baiai-org/BaiAi-Tavern>（Apache-2.0），线上 Release 仍是 `v0.1`（附安装包与 `SHA256SUMS.txt`）；V0.2 待验证后打包发布。
 
 ---
 
@@ -39,8 +89,8 @@
 | 仓库 | <https://github.com/baiai-org/BaiAi-Tavern>（public，默认分支 `main`） |
 | 协议 | Apache-2.0（`LICENSE`，第三方清单见 `NOTICE`） |
 | CI | `.github/workflows/ci.yml`（Windows runner：pyflakes + 6 套自检；`workflow_dispatch` 时额外打包并跑 frozen 自检） |
-| 发布 | Release `v0.1`，附件 `BaiAi-Tavern-V0.1.exe`（72.9MB）+ `SHA256SUMS.txt` |
-| 产物 | `dist\BaiAi-Tavern V0.1.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
+| 发布 | 线上 Release `v0.1`，附件 `BaiAi-Tavern-V0.1.exe`（72.9MB）+ `SHA256SUMS.txt`；**V0.2 待用户真机验证后打包发 `v0.2`** |
+| 产物 | `dist\BaiAi-Tavern V0.2.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
 | 图标 | 全部由 `scripts/make_icons.py` + `app/uikit.py` 绘制，`resources/icons/*.ico` 是产物 |
 
 **发新版本流程**
@@ -58,6 +108,11 @@ scripts\build_installer.bat  :: 组装 build\payload → dist\BaiAi-Tavern V0.x.
 > 所以对外统一用 `BaiAi-Tavern-V0.1.exe`，本地 `dist\` 里的文件名可保持带空格。
 > 上传 Release 需要 token 具备 `Contents: write`（classic token 需 `repo` + `workflow`）；
 > **不要把 token 写进任何文件**，用完立即 Revoke。
+>
+> **自动更新依赖 Release 附件**：客户端（`app/updater.py`）按「`BaiAi-Tavern` 开头 + `.exe` 结尾 +
+> 不是主程序名 + 优先带版本号」挑安装包，并会下载 `SHA256SUMS.txt` 做 SHA256 校验。
+> 发版时**必须**同时上传安装包与 `SHA256SUMS.txt`，命名保持 `BaiAi-Tavern-V0.x.exe`，
+> 否则老版本用户「立即更新」会提示找不到安装包（不致命，可手动下载）。
 
 ---
 
@@ -66,7 +121,7 @@ scripts\build_installer.bat  :: 组装 build\payload → dist\BaiAi-Tavern V0.x.
 ```
 ┌──────────────────────── GUI 进程（app/）────────────────────────┐
 │ app/main.py          单实例锁、日志、主题、异常钩子、--uninstall  │
-│ app/main_window.py   主窗口 + 侧边栏 + 7 个页面 + 托盘            │
+│ app/main_window.py   主窗口 + 侧边栏 + 8 个页面 + 托盘            │
 │ app/context.py       AppContext：配置、API 客户端、Bot 进程管理、  │
 │                      3 秒状态轮询（Poller）、事件 WS 客户端        │
 │ app/bot_process.py   以子进程方式拉起/结束 bot.exe（或 bot.main）  │
@@ -82,6 +137,7 @@ scripts\build_installer.bat  :: 组装 build\payload → dist\BaiAi-Tavern V0.x.
 │                  receiver(事件分发)                                │
 │ bot/chat_router.py  收到消息 → 选角色 → 提示词 → LLM → 分段回复    │
 │ bot/scheduler/    proactive(主动消息) + triggers(定时/空闲/随机)   │
+│ bot/media/        富媒体中枢 store/voice/images/hub(runtime.media)   │
 │ bot/ai_engine/    engine(编排) + prompt_builder(提示词) + llm_client│
 │ bot/memory/       短期(上下文) + 长期(记忆/向量化前的加权条目)      │
 │ bot/database/     aiosqlite：models(建表) + crud                  │
@@ -107,6 +163,8 @@ GET/POST/PUT/DELETE /characters  /characters/{id}  /characters/import  /characte
 GET  /conversations  /conversations/{id}/messages  /conversations/{id}/memories
 POST /conversations/{id}/memories   DELETE /memories/{memory_id}
 POST /proactive/trigger
+GET  /providers            POST /providers/test（V0.2 模型路由：槽位状态 / 单槽位测试）
+GET  /media/voices  /media/file  /media/inbox（V0.2 富媒体：音色 / 本地媒体 / 收件箱）
 ```
 
 鉴权：仅当 `api.token` 非空时校验请求头 `X-Tavern-Token`（或 `?token=`）。**只监听 `127.0.0.1`**；
@@ -119,16 +177,19 @@ POST /proactive/trigger
 | 目录 | 内容 | 常见改动入口 |
 |---|---|---|
 | `app/` | GUI 进程（34 个文件，含包初始化） | 界面/交互 |
-| `app/pages/*.py` | 7 个页面：仪表盘 / 机器人 / 角色管理 / 主动消息 / 对话查看 / 系统设置 / 日志 | 加功能优先看 `pages/base.py`（`Page` 基类：`build/refresh/on_status/on_event/reload_if_loaded`） |
-| `app/widgets/*.py` | 可复用控件：`qq_form`（官方凭据表单）、`llm_form`、`character_card`、`fields`、`status_indicator` | 表单字段 |
+| `app/pages/*.py` | 8 个页面：仪表盘 / 机器人 / 角色管理 / **模型路由(V0.2)** / 主动消息 / 对话查看 / 系统设置 / 日志 | 加功能优先看 `pages/base.py`（`Page` 基类：`build/refresh/on_status/on_event/reload_if_loaded`） |
+| `app/widgets/*.py` | 可复用控件：`qq_form`（官方凭据表单）、`llm_form`、`character_card`、`fields`、`status_indicator`、**`provider_form`(V0.2 槽位表单，含服务商预设/获取模型列表/测试线路/ASR 下载进度条)** | 表单字段 |
+| `app/llm_presets.py` / `app/provider_presets.py` | LLM 服务商预设（主模型，**34 家**：国内直连 / 国际 / 聚合平台 / 自建网关 / 本地）/ 模型路由各槽位服务商预设（**看图 13 / 生图 14 / ASR 8 / TTS 7 家**，选中自动填 Base URL + 候选模型，可带 `engine` 字段联动引擎下拉） | 加服务商 |
 | `app/onboarding.py` | 6 步配置引导（步骤编号连续，`EXPECTED_HEADS` 与自检绑定） | 引导流程 |
 | `app/uikit.py` / `app/icons.py` | 手绘图标/箭头/开关（**不用 emoji 字形**） | 任何视觉元素 |
 | `app/qt_safe.py` | 把外部数据转成 Qt 安全形式（超 int64 整数 → 字符串） | **新增"外部数据进信号"时必须过这里** |
-| `bot/` | Bot 进程（28 个文件，含包初始化） | 业务逻辑 |
-| `bot/runtime.py` | 多机器人装配、配置热重载、事件总线、`snapshot()` | 加新的状态字段 |
-| `bot/qq_official/*.py` | 官方通道：`client`(REST/凭证) `gateway`(WS/心跳/重连) `messaging`(发送/探测) `receiver`(事件分发) | 官方协议相关 |
+| `bot/` | Bot 进程（含包初始化） | 业务逻辑 |
+| `bot/runtime.py` | 多机器人装配、配置热重载、事件总线、`snapshot()`；`self.media = MediaHub(self)` | 加新的状态字段 |
+| `bot/qq_official/*.py` | 官方通道：`client`(REST/凭证/**富媒体上传**) `gateway`(WS/心跳/重连) `messaging`(发送/探测) `receiver`(事件分发) | 官方协议相关 |
+| `bot/media/*.py` | **V0.2 富媒体**：`store`(data/media 落地) `voice`(TTS 客户端) `images`(生图/理解) `instruct`(TTS 指令风格 SKILL，主模型按百炼官方格式生成指令) `hub`(`MediaHub` 收发编排) | 看/发图/语音 |
 | `bot/scheduler/proactive.py` | 主动消息调度（APScheduler 任务、配额、免打扰、`trigger_once`） | 触发策略 |
-| `common/` | 双进程共用：`config`(ConfigManager) `paths` `bots`(BotSpec) `text`(分段/清洗) `async_utils` `logging_setup` `utils` | 配置/路径 |
+| `bot/ai_engine/*.py` | `engine`(编排，**带 vision 图像理解**) `prompt_builder`(提示词) `llm_client`(OpenAI 兼容) | 提示词/模型调用 |
+| `common/` | 双进程共用：`config`(ConfigManager) `paths` `bots`(BotSpec) `text`(分段/清洗) `async_utils` `logging_setup` `utils` **`providers`(V0.2 槽位规格)** | 配置/路径 |
 | `installer/common.py` | **安装/卸载全部逻辑**（复制、注册表、快捷方式、自删除、进程回收） | 安装行为 |
 | `installer/installer_main.py` | 安装向导（安装 / 重装 / 卸载，`--silent` 等） | 向导 UI |
 | `tests/` | 8 套自检 + mock（见第 9 节） | 加断言 |
@@ -137,11 +198,25 @@ POST /proactive/trigger
 
 **配置系统要点**
 
-- 结构（`common/config.py` 的 `DEFAULTS`）：`app` / `llm` / `qq` / `proactive` / `memory` / `database` / `characters` / `api` / `logging`。
+- 结构（`common/config.py` 的 `DEFAULTS`）：`app` / `llm` / `qq` / `proactive` / `memory` / `database` / `characters` / `api` / `logging` / **`providers`(V0.2)** / **`media`(V0.2)**。
+- **`providers`（V0.2 模型路由）**：槽位 `chat` / `vision` / `image` / `tts`，每个是
+  `engine` / `base_url` / `api_key` / `model` /（tts 另有 `voice`）。
+  **主模型统一读 `llm` 段**：`load_slot("chat")` 以 `llm` 段为准，仅当 `llm` 段未配置时才回退
+  `providers.chat`（兼容早期在路由页填过主模型的老配置）——模型路由页面已不显示 chat 槽位，
+  界面上主模型只在「系统设置 → LLM」改。
+  **引擎取值**：`openai`（默认，vision/image 远程）/ `edge-tts`（仅 tts，在线免费无需 Key）/
+  `dashscope`（仅 tts，阿里云百炼原生接口：Qwen3-TTS 与 CosyVoice，端点按模型名路由，
+  Base URL 带不带 `/compatible-mode/v1` 都行）/
+  `gemini-native`（仅 image，Gemini 原生接口）。
+  `ProviderSpec.configured`：edge-tts 恒为 True；openai 需 base_url（本地 127.0.0.1 不强制 Key，远程必须有 Key）。
+  语音转文字不占槽位（官方平台参考转写）；旧配置遗留的 `providers.asr` 段由 `strip_legacy_keys` 自动清理。
+- **`media`（V0.2 富媒体行为）**：`enabled` / `voice_reply_probability`(0–1 语音回复概率) / `allow_image`(是否允许生图) /
+  `image_marker`(默认 `[IMG]`) / `voice_max_chars`(单条语音字数上限，超长拆分) / `temp_days`(临时文件保留天数)。
 - `qq` 下：`id name enabled character_id character_name user_nickname reply_enabled group_reply_enabled official{app_id,app_secret,...}`；**多机器人是 `qq` 下的列表式条目**（`raw_bot_entries()` / `common/bots.py`）。
 - 值支持 `${ENV_VAR}` 展开。
 - 路径覆盖（自检靠它隔离）：`BAIAI_HOME`、`BAIAI_DATA_DIR`（兼容旧名 `QQAI_HOME` / `QQAI_DATA_DIR`）；卸载注册表键可用 `BAIAI_UNINSTALL_KEY` 覆盖。
 - 数据目录优先级：`BAIAI_DATA_DIR` → exe/项目目录下 `data/`（可写时）→ `%APPDATA%\BaiAi-Tavern\data`（旧目录 `QQ-AI-Tavern` 存在则沿用）。
+- 富媒体临时文件落在 `data/media/inbox`（用户发来的）与 `data/media/outbox`（角色发出的），按 `temp_days` 定期清理。
 - 遗留键清理：`LEGACY_QQ_KEYS` / `LEGACY_SECTIONS` / `LEGACY_APP_KEYS` + `strip_legacy_keys()`，会写回并留 `config.yaml.bak`。
 
 ---
@@ -159,6 +234,20 @@ POST /proactive/trigger
 9. **`.bat` 必须 CRLF**，`.py/.md/.yml/.yaml/.qss/.spec` 必须 LF（`.gitattributes` 已固定）。
 10. **中文用户可见文案 + `%` 格式化**；界面元素不要用 emoji/符号字形（系统缺字形会显示成方块），图标用 `app/uikit.py` 画。
 11. **不要把真实凭据提交进仓库**：`data/`、`config.yaml`、`*.log`、`dist/`、`build/` 都在 `.gitignore` 里，别绕过它。
+12. **富媒体必须优雅降级（V0.2）**：任何媒体能力失败（线路未配置 / 调用出错 / 下载或解码失败 / 上传失败）
+    都要退回纯文字并记日志，绝不把聊天打断。`chat_router` 的 `inbound_media()` 异常 → 按纯文字继续；
+    `hub.compose()` 异常 → 按纯文字继续；`send_outgoing()` 里若文字 + 媒体都没发出去，把 `out.body` 再按纯文字发一遍保底。
+    语音回复时**整条**变语音（`send_text=False`），不要文字 + 语音各发一遍。
+    语音理解零配置：直接用官方平台随消息推送的 `asr_refer_text` 参考转写（不下载音频），
+    平台没给时记 errors（"角色暂时没听清"），按纯文字继续。
+13. **`[IMG]` 生图约定（V0.2）**：角色回复或主动消息末尾单独一行 `[IMG] 描述`（`media.image_marker`），
+    最多一个；命中即调图像生成线路发图。`parse_image_prompt()` 解析、`_truncate_keep_marker()` 保证截断不丢标记。
+14. **主模型只认 `llm` 段（V0.2 整合）**：`load_slot("chat")` 以 `llm` 段为准（`providers.chat` 仅作旧配置兜底）；
+    **不要在别处直接读 `llm` 段当主模型**——一律走 `common/providers.py::load_slot("chat")`。
+15. **测试线路必须按「表单当前值」测试（V0.2）**：GUI「模型路由」的测试按钮把 `form.values()` 随
+    `/api/providers/test` 一起提交（`bot/api.py::_SlotOverrideConfig` 把表单值叠在已保存配置上，
+    空字符串字段按「没填」处理）。**不要改回只读已保存配置**——用户改完还没点「保存」就能测，
+    否则 local 引擎这种「什么都没填」的线路永远报「这条线路还没填完整」。
 
 ---
 
@@ -219,25 +308,58 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 
 
 ---
 
-## 9. 自检体系（8 套，共 548 项）
+## 9. 自检体系（8 套，开发环境 681 项 / 打包后 719 项）
 
 | 命令 | 项数 | 覆盖 |
 |---|---|---|
-| `python -m tests.smoke_test` | 176 | 单元（86）+ 端到端（90，含 mock 官方平台与 mock LLM） |
-| `python -m tests.official_smoke` | 54 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 |
+| `python -m tests.smoke_test` | 267 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / TTS 风格参数与试听文案池 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
+| `python -m tests.official_smoke` | 73 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且不下载音频）** |
 | `python -m tests.multibot_smoke` | 38 | 两个官方机器人 + 两个角色互不串台 |
-| `python -m tests.onboarding_smoke` | 84 | 6 步配置引导（含步骤标题 `EXPECTED_HEADS`） |
-| `python -m tests.gui_smoke` | 107 | 界面集成（offscreen）：七页裁切体检、官方表单、超大 ID 回归 |
+| `python -m tests.onboarding_smoke` | 88 | 6 步配置引导（含步骤标题 `EXPECTED_HEADS`；含**汇总页隐藏「取消引导」/ LLM 密钥留空也能「完成」不 KeyError**） |
+| `python -m tests.gui_smoke` | 149 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
 | `python -m tests.scheduler_live` | 14 | 定时触发"真实到点"慢速自检 |
-| `python -m tests.frozen_smoke` | 34 | **打包产物**（产物比源码旧时自动跳过，`--force` 强制） |
-| `python -m tests.installer_smoke` | 41 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 |
+| `python -m tests.frozen_smoke` | 0 / 34 | **打包产物**（无产物时自动跳过 0 项；产物齐备时 34 项，`--force` 强制） |
+| `python -m tests.installer_smoke` | 52 / 59 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 + **更新系统（版本比较/附件挑选/SHA256/下载进度/启动限流/静默拉起，本地 HTTP 模拟 GitHub，无外网依赖）**（无产物 52 项；有产物 59 项） |
 
 - `tests/mock_servers.py`：mock LLM + mock QQ 官方平台（`/app/getAppAccessToken`、`/users/@me`、`/gateway`、
   `/v2/users/{openid}/messages`、`/v2/groups/{group_openid}/messages`、WS `/official-ws`、控制面 `/__control/*`）；
+  **V0.2 新增富媒体 mock**：`POST /v2/users/{openid}/files`（`file_info` 富媒体上传）、`/v1/audio/speech`（TTS 返回 MP3）、
+  `/api/v1/services/aigc/multimodal-generation/generation` 与 `/api/v1/services/audio/tts/SpeechSynthesizer`
+  （百炼原生 TTS mock，JSON 返回 `output.audio`，model 以 `urltest` 开头走 audio.url 分支）、
+  `/v1/images/generations`（生图返回 b64）、`/media/test.png` / `/media/test.silk`（仿真语音附件；产品代码不下载，
+  仅事件里带真实 URL）；mock 记录 `last_llm_user_text`（最近一次 LLM 请求的最后一条 user 消息文本），
+  用于断言"平台参考转写进了模型上下文"。
+  控制面 `emit_c2c` / `emit_group` 支持 `attachments` 列表（含 `asr_refer_text`），`reset()` 支持 `vision_text`。
   辅助：`MockProcess`、`reset()`、`emit_c2c()`、`emit_group()`、`official_sent()`、
   常量 `OFFICIAL_APP_ID/SECRET/TOKEN`、`DEFAULT_OPENID`。
 - `tests/card_factory.py`：生成测试用 PNG / JSON / YAML 角色卡。
 - 自检统一用 `BAIAI_DATA_DIR` / `QQAI_DATA_DIR` 指向临时目录，互不污染。
+- **跑自检的 shell 里不要残留 `BAIAI_DATA_DIR` 环境变量**：`common/paths.py` 里它优先级高于 `QQAI_DATA_DIR`，
+  子进程 Bot 会用它覆盖测试设的临时数据目录，导致"Bot 进程已启动"健康检查连错端口而误报失败。
+- **`tests.mock_servers.MockProcess` 的孤儿进程防护**：Qt 界面 teardown 偶发 abort
+  （退出码 `-1073740791` / 0xC0000409，无害但会跳过 Python finally 的尾部语句），
+  历史上每次崩溃退出泄漏一个 mock 子进程（曾积累 23 个）。现在两层防护：
+  ① Windows 下 mock 子进程放进带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object，
+  父进程无论怎么死，Job 句柄关闭即杀子进程；② `gui_smoke` 的 finally 把 mock/bot 清理
+  提到 Qt 析构之前。跑完自检可用
+  `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? { $_.CommandLine -like '*tests.mock_servers*' }`
+  确认无残留；有残留说明 Job Object 未生效（手动 kill 后查 `_attach_kill_on_close_job`）。
+  gui_smoke 已加 stdout 行缓冲：即使 abort，「N 项通过」摘要也不会丢在块缓冲里。
+- **`installer_smoke` 成品阶段必须剥离 `BAIAI_PAYLOAD`**：源码模式阶段把
+  `BAIAI_PAYLOAD`（cmd.exe 冒充的小体积假 payload，见 `make_payload`）设进了全局环境变量。
+  `installer.common.payload_dir()` 里该环境变量**优先于安装包内嵌 payload**——一旦泄漏给
+  成品安装器子进程，装出来的"主程序"就是几百 KB 的 cmd.exe 副本，它的
+  `--uninstall --silent` 什么也不做、直接退出码 0，卸载逻辑根本没被验证，
+  曾让「自卸载后注册表项已清理 / 自己被删掉」两条误报失败。成品阶段的三个子进程
+  （安装 / gui_alive / 主程序卸载）现在都显式传 `clean_env`（剔除 BAIAI_PAYLOAD），
+  且「主程序与 Bot 都在」断言加了体积下限（>1MB）防回归。失败时设
+  `BAIAI_KEEP_TESTDIR=1` 可保留临时目录，读 `real-install\data\logs\gui.log` 定位。
+- **Windows 注册表「陈旧键缓存」怪癖**（本机 Win11 26200 实测）：一个进程反复
+  创建/删除同一个 HKCU 键后，**其它进程重新创建的同名键，该进程（及其子进程树）
+  的 winreg 会一直看不到**（OpenKey/DeleteKeyEx 报 WinError 2），而**新启动的
+  reg.exe 子进程能看到**。这就是 `read_uninstall_entry` 要 winreg + reg.exe 双读、
+  `remove_uninstall_entry` 要 winreg + reg.exe 双删的原因——别把 reg.exe 兜底当成
+  冗余删掉。
 - CI（`.github/workflows/ci.yml`）跑 pyflakes + 6 套（不含 frozen/installer，那两套只在 `workflow_dispatch` 时跑）。
 
 ---
@@ -281,6 +403,337 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 
     现在会自动迁移并给出"尚未填写 AppID / AppSecret"的明确提示。
 17. **换行符**：`.bat` 被写成 LF 会导致 cmd 解析错乱；改回来时记得 CRLF（`.gitattributes` 已固定，但脚本编辑仍可能破坏）。
 18. **Python 3.9 的 API 差异**：`Path.write_text(newline=...)`、`str.removeprefix` 等 3.10+ 特性不要用。
+19. **`ProviderSpec.available` 不存在（V0.2 富媒体回归）**：`common/providers.py` 的规格对象只有 `configured` 属性，
+    但 `images.py` / `voice.py` 里多处写成 `if not spec.available:` → 运行时 `AttributeError`。
+    表现很隐蔽：官方 e2e 里 `[IMG]` 生图和 silk ASR 都"静默降级成纯文字"（被 `chat_router` 的宽 except 吃掉），
+    但 `bot.log` 里有 `'ProviderSpec' object has no attribute 'available'`。**改富媒体前先确认用的是 `spec.configured`。**
+20. **mock 官方平台 `reset()` 曾把 `official_seq` 清零（V0.2）**：事件 id 基于 `official_seq` 生成，清零后
+    跨 `reset()` 会**复用同一个 msg_id**，而接收端按 msg_id 维护 `msg_seq` 计数 → 富媒体段的 `msg_seq` 断言
+    （期望 `[1,2]`）拿到 `[3,4]` 而失败。**官方事件序号本来就单调递增，`reset()` 不应清它**（现已保留）。
+21. **安装包自检的"假 payload"用 `cmd.exe` 冒充 bot.exe（V0.2）**：`cmd.exe` 的 stdin 是 `DEVNULL`（EOF）时
+    读完就退出，于是"运行中的程序会锁住自己的 exe"这条前提不成立。修法：`Popen(..., stdin=subprocess.PIPE)`
+    保持一条打开的管道让 cmd 一直等输入（真 bot.exe 不读 stdin，不受影响）。
+22. **跑自检的 shell 别带 `BAIAI_DATA_DIR`（V0.2 踩过）**：`common/paths.py` 里它优先级高于 `QQAI_DATA_DIR`，
+    会覆盖测试设的临时数据目录 → 子进程 Bot 健康检查连错端口，"Bot 进程已启动"误报失败。详见第 9 节。
+23. **（已移除）本地 ASR 模型下载（V0.2 开发中做后又删）**：asr 槽位（本地 SenseVoice / sherpa-onnx，
+    首次识别自动下载约 230MB 模型 + 进度条）已随「听语音零配置化」整体移除——真机验证过
+    QQ 官方平台随语音消息直接推 `asr_refer_text` 参考转写，用户确认后决定只留这条路径。
+    遗留知识：`sherpa_onnx` 是延迟 import（没装也能启动）、非流式解码是 CPU 同步调用要
+    `asyncio.to_thread`、本地引擎只收 16-bit PCM wav。若将来要恢复「可配线路」，这些结论都还有效。
+24. **主模型整合的方向（V0.2）**：`load_slot("chat")` 是 **`llm` 段优先、`providers.chat` 兜底**，
+    不是反过来。模型路由页面已不显示 chat 槽位（`models.py` 跳过 `SLOT_CHAT`），`_collect()` 保存时
+    也不写 `providers.chat`（`deep_merge` 会保留磁盘上已有的旧值）。改动主模型读写路径时别破坏这个方向。
+25. **Gemini（nano banana）的 OpenAI 兼容生图接口对参数挑剔（V0.2，用户踩过）**：
+    `bot/media/images.py::_via_images` 的 body 会触发 400——部分兼容层版本直接拒绝 `response_format`，
+    `size` 只接受特定取值（我们测试线路用的 512x512 就不行）。处理：**400 时自动降级参数重试**
+    （全量 → 去掉 `size` → 去掉 `response_format`），解析兼容 `b64_json` 与 `url` 两种返回；
+    再不行就落到 `_via_chat`（chat/completions + `modalities` 出图）。
+    **别把 body 改回「一次发全量参数」的单发逻辑**；新增生图端点适配时保持这个重试链。
+    预设里 Gemini 的 Base URL 是 `https://generativelanguage.googleapis.com/v1beta/openai`（带 `/openai` 段），
+    模型名 `gemini-2.5-flash-image`。
+26. **「测试线路」按表单当前值测试（V0.2）**：`/api/providers/test` 接受 `values`（表单当前值），
+    `bot/api.py::_SlotOverrideConfig` 把它叠在已保存配置上——**空字符串字段按「没填」处理**
+    （用户在界面上清掉了旧值，测试就该当没填）。修过一次：ASR 选 local 后点测试报「这条线路还没填完整」，
+    就是因为只读了已保存配置（磁盘上还是 openai + 空 URL）。GUI 侧 `ProviderSlotForm.test()` 必须带上
+    `values=self.values()`。
+27. **PySide6 的 QComboBox 没有 `itemTexts()`（V0.2 踩过）**：Qt C++ 的 QComboBox 无此方法（那是
+    QCompleter 的习惯），PySide6 一样没有。`provider_form.py` / `characters.py` 里判断音色是否在候选里，
+    用 `[combo.itemText(i) for i in range(combo.count())]`。这 bug 之前被页面初始化的 try/except 吞掉
+    （日志「页面初始化失败」），显式调 `refresh()` 就炸——看到这种日志别当小事。
+28. **服务商预设的维护规则（V0.2）**：预设文件是 `app/llm_presets.py`（主模型，34 家）与
+    `app/provider_presets.py`（三槽位：看图 13 / 生图 14 / TTS 7；asr 槽位的 8 家预设已随槽位移除）。规则：
+    - `Provider.name` **是稳定 ID**——onboarding 与 gui 自检按名称引用（如 DeepSeek 预设名），改名会破坏自检；
+    - 预设的 `models` 只是**候选/兜底**（服务商模型名经常变），真实清单靠「获取模型列表」从上游 `/models` 拉，
+      所以新增服务商时模型名不确定就留空元组 + 在 `note` 里说明（如火山方舟要填 ep- 接入点 ID）；
+    - 同一槽位内 `base_url` 尽量不重复（`by_base_url` 反查取第一个命中），跨槽位可以重复
+      （按槽位 + URL 精确匹配，不会串）。已知例外：vision 槽位有两条硅基流动预设
+      （DeepSeek-VL2 专用 + 其他 VL 模型），反查会优先显示前者，功能无碍；
+    - 预设可带 `engine` 字段（如 Gemini 原生生图预设 = `gemini-native`），选中时表单自动切引擎下拉；
+    - `labels()` 末位固定是「自定义 / 其他」，自检依赖它。
+29. **Gemini 生图接口的实测结论（V0.2，用户真实 Key 实测 + 官方文档核对）**：
+    - **OpenAI 兼容层（`…/v1beta/openai`）的 `/images/generations` 只支持个别图像模型**——
+      官方文档（ai.google.dev/gemini-api/docs/openai）点名只有 `gemini-2.5-flash-image` 与
+      `gemini-3-pro-image-preview`；`prompt/model/n/size/response_format` 都接受，未知参数静默忽略，
+      `extra_body` 可传 `aspect_ratio` / `generation_config` / `safety_settings`。
+      其他模型（如 nano banana 2 lite = `gemini-3.1-flash-lite-image`）走兼容层会 **404**（不是 Key 问题）。
+    - **新一代 Nano Banana 2 系列走原生接口**（`gemini-native` 引擎）：
+      `POST …/v1beta/models/{model}:generateContent?key={key}`，body 带
+      `generationConfig.responseModalities=["TEXT","IMAGE"]`，图片在
+      `candidates[0].content.parts[].inlineData`（base64，**PNG 或 JPG 都可能**，按 mimeType 定扩展名）。
+      注意：原生接口只认 **`?key=` 查询参数**，`Authorization: Bearer` 会 401（Gemini CLI 的 `AQ.` 前缀 Key 同理）。
+    - **兼容层的 chat 出图（`/chat/completions` + `modalities`）现在要求小写** `["text","image"]`
+      （大写会 400 "Invalid modality type"）；且目前对图像模型有服务端 bug——
+      `gemini-2.5-flash-image` 直接 400「chat.completions 不支持」，3.x 模型生成出 **JPEG** 后
+      兼容层崩在 "Unhandled generated data mime type: image/jpeg"。
+      所以程序策略：`gemini-native` 引擎原生优先、chat/modalities 兜底（modalities 小写→大写自动重试）；
+      openai 引擎走 `/images/generations`（参数降级重试）→ chat 兜底。
+    - 实测产物留档：worktree 根目录 `gemini_native_2.5_flash_image_实测.png`、
+      `gemini_兼容层_3pro_image_preview_实测.png`。
+30. **QQ 官方附件消息的语音字段（C2C_MESSAGE_CREATE，官方文档核对过）**：
+    平台 `MessageAttachment` 对语音消息有三个关键字段：
+    - `asr_refer_text`：QQ/腾讯内置 ASR 的参考转写，免费——**这就是产品用的转写**
+      （零配置、不下载音频，直接进模型上下文）；平台某次没给时记 errors 提示"角色暂时没听清"；
+    - `voice_wav_url`：平台已把 SILK 转成 WAV 的文件 URL——现在不下载（留字段备将来可配线路用）；
+    - 新版 schema **没有 `aes_key`**（旧文档提过，现文档已无）；`filename` 可能无扩展名，
+      分类要按 `content_type`（`voice` / `audio/silk`）兜底。
+    实现见 `bot/media/hub.py::_process_voice_attachment`（参考转写单一路径），单元 + e2e 都有覆盖
+    （official_smoke 断言参考转写进了 `last_llm_user_text` 且未下载任何音频）。
+31. **TTS 风格参数与音色清单（V0.2，官方文档核对过）**：
+    - edge-tts 走微软 Edge TTS 原生 `rate` / `pitch` / `volume`（如 "+10%" / "+5Hz" / "-10%"）；
+      OpenAI 兼容 `/audio/speech` 官方支持 `speed`（0.25~4.0，不支持的兼容服务商会忽略）。
+      配置写在 `providers.tts` 的 `rate/pitch/volume/speed` 键，`load_slot` 读进 `spec.extra`，
+      `MediaHub.compose` 与 `/api/providers/test` 回读后传给 `TTS.synthesize`；
+    - GUI「模型路由 → 文字转语音」有「音色调节」行（edge-tts：语速 -50%~+100% / 音调 ±50Hz /
+      音量 ±50%~+100%；OpenAI：语速倍率 0.5~2.0），0 值不写配置（保持服务商默认）；
+      「角色管理」对话框每角色可单独设音色 + 试听，试听文案每次从
+      `bot/media/voice.py::PREVIEW_TEXTS`（12 句）随机取一句并回显；
+    - 音色清单：静态兜底 14 个中文音色（微软当前官方清单，`provider_form.EDGE_TTS_ZH_VOICES`，
+      旧的 3 个已下线音色 Xiaochen/Xiaohan/Xiaochuan 已移除）；启动后 `/api/media/voices`
+      经 `edge_tts.list_voices()` 拉全量（322 个，中文在前）合并进下拉框，拉不到保留静态清单；
+    - 语音回复默认概率 30% → **10%**（`DEFAULTS["media"]` / `config.example.yaml` / models.py 三处同步）。
+32. **视觉（看图）链路的实测结论（V0.2 用户真机反馈"角色看不见图"，用真实 Key 实测定位）**：
+    三个叠加的原因，缺一不可——
+    - **图片必须挂在最后一条（当前）user 消息上**。`AIEngine._with_image` 原先挂在
+      历史第一条 user 消息上；deepseek-flash 实测：挂早期历史时模型回复"图没加载出来，
+      我这看不到"，挂当前消息则能准确描述图片内容（同一张图 A/B 对照 2 轮全对）。
+      官方文档只说"图片只能在 user 消息"，没说必须哪条——这是模型行为，不是文档承诺。
+    - **推理类模型看图会先"想"再答**：deepseek-flash 对复杂照片（~180KB 照片）在
+      max_tokens=200 时把 200 token 全耗在 `reasoning_tokens` 上，返回
+      `finish_reason=length` + **content 为空**。视觉线路的 `max_tokens` 现在至少给 1024
+      （`_vision_client`），正文才不会空。
+    - **MIME 必须按文件头识别**：`media/store.py` 落盘文件名没有点
+      （`20261005_110802_dee5jpg`），`Path.suffix` 取不到扩展名，原先一律标 `image/png`
+      把 JPEG 送上去。`image_data_url` 现在按 magic bytes 识别
+      （JPEG FFD8 / PNG 89504E47 / GIF / WEBP），识别不了才按扩展名猜。
+    - 生图侧同批修复：gemini-native 遇 503（Google 高负载，官方原话"稍后重试"）
+      会 3 秒后重试一次再降级；用户 11:09 的失败 = 503 高负载 + 降级到兼容层 chat
+      撞上已知 JPEG bug（坑 29）。
+    实测脚本留档：`scripts/dev_vision_probe.py` / `dev_vision_diag.py` / `dev_vision_ab.py` /
+    `dev_gemini_gen_test.py`（Key 已改为环境变量 `DEEPSEEK_API_KEY` / `GEMINI_API_KEY`，
+    图片路径改为 `data/media/inbox/your_image.jpg` 占位，仓库里不含真实 Key 与图片）。
+33. **音色清单只在表单构建时拉一次会"永久 14 个"（V0.2 用户反馈"模型路由音色太少"）**：
+    模型路由页在窗口初始化时构建表单，若当时 Bot 还没就绪，`/api/media/voices` 拉取失败、
+    下拉框只剩 14 个静态中文音色，之后也不再重试（角色管理侧每次打开对话框都拉，所以那边全）。
+    修法：`ModelsPage.refresh()` 每次都调 `form_tts._refresh_voice_list()`，`on_status` 里
+    Bot 上线后再补救重试一次。**凡是"启动时拉一次"的清单数据都要考虑 Bot 就绪时序。**
+34. **角色级音色调节的合成路径（V0.2）**：`MediaHub._tts_style(character)` 先取角色
+    `tts_rate/tts_pitch/tts_volume/tts_speed`（非空才用），留空回退 `providers.tts` 的全局值；
+    试听走 `/api/providers/test` 的 `values`（`_SlotOverrideConfig` 叠到 `providers.tts` 节点，
+    `load_slot` 读进 `spec.extra`）。**别在合成时只读全局**，否则角色级设置静默失效。
+35. **头像的存储与迁移（V0.2）**：头像文件存 `data/characters/avatars/{id}{ext}`，
+    DB 只存相对路径 `avatar_path`；`registry.update_avatar` 换不同扩展名时会清理旧文件。
+    PNG 卡导入时整图就是头像（`loader` 把 PNG 字节直接放进 `avatar_bytes`），
+    JSON/YAML 卡读 base64 `avatar` 字段。`avatar_path` 可能是绝对路径（测试/tempdir），
+    `registry.abs_path` 两种都认。
+36. **自动更新的时序与限制（V0.2）**：
+    - **安装程序会主动杀掉安装目录里正在运行的旧版本**（`ic.install` →
+      `stop_running_app`），所以 GUI 的更新流程是「拉起新安装包（DETACHED）→ 自己尽快退出」，
+      不要指望安装完成后旧进程还活着去做收尾。`launch_after=True`（不带 `--no-run`）
+      时安装程序装完会自己启动新版。
+    - GitHub 未登录 API 限速 60 次/小时/IP：启动检查有 6 小时限流
+      （`app.update_last_check`），手动检查不限流但别加轮询。
+    - 源码模式（`python -m app.main`）没有「安装目录」概念：`install_dir_for_self()`
+      回退到注册表 InstallLocation / 默认目录，界面上「重装 / 更新」装的是那个目录，
+      界面上会明确显示「源码运行」。
+    - 版本比较按数字段（`parse_version`）：`0.10 > 0.9`；tag 与 `V0.2` 这种显示格式
+      都能解析，解析不出来就按「不算新版」处理（宁可不更新也不误更新）。
+    - 单实例锁：新版启动时旧版必须已退出（QSharedMemory），安装程序的 `stop_running_app`
+      保证了这一点，别在 GUI 里加「新旧并存」的逻辑。
+37. **阿里云百炼（DashScope）TTS 不是 OpenAI 兼容协议（V0.2，真实 Key 实测过）**：
+    - 百炼的 `/compatible-mode/v1` 只兼容 chat / embeddings / `/models` 等接口，
+      **TTS 走 `/audio/speech` 会 404**（标准域名与 MaaS 工作空间域名都 404，已实测）。
+    - 非实时 TTS 走 DashScope 原生端点，且**按模型系列分家、不能混用**：
+      Qwen-TTS（`qwen3-tts-*`）→ `/api/v1/services/aigc/multimodal-generation/generation`；
+      CosyVoice / Qwen-Audio-TTS → `/api/v1/services/audio/tts/SpeechSynthesizer`
+      （文档：help.aliyun.com/zh/model-studio/non-realtime-tts-user-guide）。
+      `bot/media/voice.py` 的 `_dashscope_path()` 按模型名前缀路由，`_dashscope_root()`
+      把 Base URL 剥成服务根（用户填 compatible-mode 地址也能直接用）。
+    - 请求体 `{"model":..., "input":{"text":..., "voice":...}}`，`voice` 必填。
+      **三族音色不能跨模型混用**（官方文档原话：混用时返回 `InvalidParameter`，
+      例如 `[cosyvoice:]Engine error [411]: TTS speak operation failed`，已实测）：
+      Qwen-TTS（`qwen3-tts-*`）用 Cherry / Ethan 等英文名；CosyVoice（`cosyvoice-*`）
+      用 longanyang 等（**v1 / v2 音色名不通用**：cosyvoice-v2 配 longxiaochun 会 400
+      「Engine return error code: 418」，v3-flash 配 longanyang 正常）；
+      Qwen-Audio-TTS（`qwen-audio-*`）用 yuxiaoyun_v3.1 等（官方「Qwen-Audio-TTS
+      音色列表」，含支持方言/多语种的 longanhuan_v3.1 等 4 个 + 精品中文/英文音色）。
+      音色候选在 `bot/media/voice.py` 的 QWEN_TTS_VOICES / COSYVOICE_VOICES /
+      QWEN_AUDIO_VOICES 三个常量（`dashscope_voices()` 汇总进 GUI 下拉）；
+      `_dashscope()` 遇到 411 / 418 时会在报错里附上三族正确音色示例。
+      合成时 `load_slot` 给 dashscope 引擎默认 Cherry。
+    - 返回是 JSON：`output.audio.data`（Base64）或 `output.audio.url`（24 小时临时链接，
+      要自己下载）；业务错误在 HTTP 400 的 body 里（`code` / `message`），
+      `_dashscope()` 会把两者拼进 VoiceError。
+    - MaaS 工作空间地址格式 `https://ws-{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
+      可直接当 Base URL 用；`GET {base}/models` 在该域名下可用（「获取模型列表」不用改），
+      但返回的 262 个模型**不含 cosyvoice-\* 和 qwen-audio 非实时 TTS 系列**（实测
+      qwen-audio-3.1-tts-flash 不在列表里，端点却完全可用）——属百炼上游列表行为，
+      所以预设的候选模型里把 qwen-audio-3.1-tts-flash 也列上了。
+    - Qwen-TTS 非实时接口**没有 speed 等参数**，GUI 对 dashscope 引擎隐藏两组音色调节
+      （显示说明标签，不报错）；Qwen3-TTS-Instruct 系列支持自然语言指令控制、
+      Qwen-Audio-TTS 系列支持情感/富语言标签（均已接，见坑 38）。
+    - 已用真实工作空间 Key 实测：`qwen3-tts-flash` + Cherry、`cosyvoice-v3-flash` +
+      longanyang、`qwen-audio-3.1-tts-flash` + yuxiaoyun_v3.1 均 200 返回 WAV；
+      qwen-audio + Cherry 复现 411。
+    - 试听/测试线路的预览音频：`bot/api.py::_b64_preview` 原截断 120KB（约 2 秒），
+      用户反馈「只能听到 2 秒」——GUI 与 Bot 同机走 127.0.0.1，已改为给完整音频
+      （2MB 上限防极端长文本）。
+38. **TTS 指令风格 SKILL（V0.2，`bot/media/instruct.py`）**：
+    - 背景：`qwen3-tts-flash` 直出音色语调偏平。百炼的 `qwen3-tts-instruct-flash`
+      支持自然语言指令控制表现力（`input.instructions`，≤1600 Token，仅中英文，
+      可配 `input.optimize_instructions=true` 服务端再做语义优化），官方文档给出
+      「如何编写高质量的声音描述」规范——本 SKILL 就是把这套规范内置进提示词。
+    - 链路：`MediaHub.compose`（或「测试线路」）发现 tts 模型命中
+      `is_tts_instruct_model()`（模型名含 `instruct` 且不含 `realtime`）→
+      `generate_tts_instruction()` 用**主模型**（`runtime.engine.llm`）按 SKILL 提示词
+      （五原则：具体/多维/客观/原创/简洁；维度：语速/音调/情感/语气节奏/场景；
+      官方示例原文）+ 角色人设（description/personality 截 400 字）+ 待合成文本
+      生成一句指令 → `parse_tts_instruction()` 清洗（围栏/引号/「指令是：」前导语/
+      多行标签行，截 300 字）→ `TTS.synthesize(instruction=...)` 把
+      `instructions` + `optimize_instructions=true` 放进请求体。
+    - 指令里**不指定性别/年龄/声线**（音色由 voice 参数固定），只描述「怎么读」；
+      情感必须贴合语境（提示词里已约束：安慰温柔、调侃俏皮、提问上扬……）。
+    - 降级：主模型未配置 / 超时（30s）/ 报错 / 解析为空 → 返回空串，合成照常不带
+      指令。每条语音分片各生成一次指令（分片文本不同，语境不同）。
+    - **思考类主模型（deepseek-flash 等）的坑（真实用户日志发现）**：模型先输出
+      `reasoning_content` 再给正文，`max_tokens=120` 会被 reasoning 吃光
+      （`finish_reason=length` + `content=""`，偶发约 1/3）。对策：指令生成
+      `max_tokens=512` + 空内容时外层再重试一次（`generate_tts_instruction`）；
+      「测试线路」主模型探活同理（`LLMClient.test_connection` max_tokens 16→128）。
+    - **解析器的引号坑**：指令正文里可能带强调引号（「记得」「别跑太快」），
+      「取引号内容」只在**整段首尾成对**时剥外层引号；悬空引号只在**不平衡**时
+      去掉（否则会把正文末尾的强调引号截掉）。
+    - 附带改进：`TTS._dashscope` 对 qwen3-tts*/qwen-tts* 模型自动带
+      `language_type`（中文/英文自动判定，`_detect_language`，拿不准不给走 Auto）——
+      官方明确「指定语种能显著提升合成质量」。
+    - **CosyVoice 的指令参数名不同**：是 `instruction`（单数）；系统音色的 v3-flash/
+      v3-plus 要求「固定格式和内容」（见 CosyVoice 音色列表页），v3.5 复刻/设计音色
+      可任意指令——目前 SKILL 只接 Qwen3-TTS-Instruct 系列，CosyVoice 指令留待扩展。
+    - Qwen-Audio-TTS（qwen-audio-3.x）的**情感与富语言标签**已接入（见下方「Qwen-Audio 标签」
+      小节）；其 `instruction` 参数（单数，任意指令，官方文档确认
+      qwen-audio-3.1-tts-flash / 3.0-tts-plus / 3.0-tts-flash 支持，系统音色与复刻音色均可，
+      实测 200）暂未与标签同开——标签已覆盖情感/语速/拟声，先只用一套机制，效果不够再叠加。
+    - 已用真实工作空间 Key 实测：instruct 模型带指令 200 返回 WAV，且带/不带指令
+      音频时长不同（指令真实生效）；qwen-audio 带 `[whispers]` / `[giggles]` /
+      `[serious]+[excited]` 切换 / `instruction` 参数均 200，音频时长随之变化。
+    - **Qwen-Audio 情感与富语言标签（V0.2 第二轮，用户反馈「qwen-audio 调教效果不行」
+      后按官方文档补齐）**：`is_qwen_audio_tts_model()` 门控（`qwen-audio*` 非实时、
+      排除 asr）→ `generate_qwen_audio_tags()` 用主模型按 `build_qwen_audio_tag_messages()`
+      的 SKILL 提示词（内置官方全量标签表：23 控制类 + 7 富语言类，含场景→标签映射
+      「撒娇→[mischievously]/[whispers]、安慰→[empathetic]…」）把标签嵌入文本
+      → `parse_tagged_text()` 清洗（围栏 / 「好的，改写后的文本是：」类短前导语+冒号
+      截断 / 引号 / 多行）+ `_validate_tags()` 只保留官方表内英文标签（编造的 `[happy]`
+      会被删掉防念出来；中文方括号 [哈哈] 视为正文保留）→ 带标签文本直接作为
+      `text` 参数发送（`MediaHub.compose` 与「测试线路」均已接入，日志/提示分别显示
+      「情感标签」）。
+    - **第三轮加固（用户反馈「标签有时生效有时不生效 + 效果还不够」，按官方
+      non-realtime-qwen-audio-tts-http-api 全量参数表补齐）**：
+      * **双机制叠加**：SKILL 输出升级为严格两行（`文本：` 带标签文本 + `指令：`
+        一句整体语气指令，语速/音调/情绪底色 40 字内），`parse_tagged_output()`
+        拆两块（行优先找最后一行「指令：」，找不到按行内标记拆）；指令经 qwen-audio
+        的 `instruction` 参数（单数）发送，与标签同时生效。
+      * **标签逐句覆盖**：提示词要求控制标签放第一句开头、**每个句子开头都要放**
+        （可沿用同一标签）——官方说明控制标签「作用于其后文本，直到下一个控制标签
+        或长句自动切分」，长句切分会打断标签效果，逐句覆盖后整段都带情感。
+      * **本地兜底 `local_qwen_audio_tags()`**：主模型 3 次尝试（max_tokens=512，
+        思考类模型空内容重试）仍失败时，按高置信线索给标签（哈哈→[giggles]、
+        委屈/难过→[sad]、快一点+！→[very fast]、哼/才不是→[mischievously]、
+        别怕/有我→[empathetic]、疑问→[curious]）+ 固定中性指令——保证**每次**
+        合成都带调教参数；bot.log 每分片一行「语音调教（角色）：文本 | 指令」。
+      * **官方全量可调参数**（`TTS._dashscope_qwen_audio_params` 做 GUI 值映射，
+        只对 `qwen-audio*` 模型发送）：`rate` 0.5~2.0（优先 OpenAI 式 speed 倍率，
+        否则 edge 式「+10%」换算）、`pitch` 0.5~2.0（edge「+5Hz」按 1+Hz/200 近似）、
+        `volume` 0~100（edge 百分比相对默认 50）、`language_hints`（中文→["zh"]、
+        英文→["en"]，自动判定）、`format=wav` + `sample_rate=24000`（显式）。
+        GUI：模型路由页选 qwen-audio 模型时，音色调节行的语速/音调/音量/语速倍率
+        自动显示（`_sync_engine_display` 按模型前缀判断，模型框改模型会重同步）；
+        角色音色对话框的调节本来就在，自动生效。
+      * 实测（真实 Key + 真实主模型 deepseek-flash）：「快一点！要迟到了！路上别光顾着
+        看手机。」→ `[very fast]快一点！[very fast]要迟到了！[serious]路上别光顾着看手机。`
+        + 指令「语速偏快，音调稍高，催促中带着关心的叮嘱」——句内情感切换 + 逐句覆盖
+        均按预期；请求体带 instruction/rate/format/sample_rate/language_hints 全部 200。
+    - **第四轮（用户反馈「语气指令已生效、情感标签仍有概率不生效，建议不限制思考长度」+
+      贴出官方标签表与示例要求「认真重做」）**：
+      * **max_tokens 512 → 4096**（指令与标签两个生成函数都改）：实测 deepseek-flash
+        在 4096 下思考完整 `finish=stop` 稳定输出；512 时 reasoning 吃光预算会返回空
+        （finish_reason=length）——这就是「有时不生效」的主要来源之一。4096 只是上限，
+        模型正常停止不额外计费。
+      * **实测发现的第二个来源：模型自创中文标签**。4096 探针里 deepseek-flash 会输出
+        `[温柔催促]` `[着急担忧]` 这类中文方括号标签，旧 `_validate_tags` 把中文方括号
+        当正文保留 → 这些词会被 TTS 念出来 / 情感没打上。现在：提示词明确「标签是英文
+        单词、逐字照抄、不许自创、不许用中文标签」+ 校验器升级——
+        `_TAG_ALIASES` 近似拼写归一（laugh→laughing、happy→excited、Whispers→whispers
+        等 10 个）、**输出里已出现官方标签时中文方括号视为编造剥除**（完全没有官方标签
+        时 [哈哈] 仍按正文保留）、剥除打 warning 日志可查。
+      * **SKILL v3 按官方原文重建**（`build_qwen_audio_tag_messages`）：官方语义原样写入
+        （控制标签「作用于其后的所有文本，直到遇到下一个控制类标签，或因句子较长被
+        自动切分为止」；富语言标签「在当前位置插入一段拟声效果，不影响前后文本的情感
+        风格」）、官方两个使用示例原样内置；30 个标签逐个配场景精细映射（每个官方
+        标签都有使用出口，要求「选最贴合的那一个」）；
+      * **强制标签覆盖**：控制标签必须放文本最开头（不许裸开头）；多句文本每句开头都放
+        （情感相同重复同一标签、变化换标签，防长句自动切分打断）；逗号中间不放控制标签；
+        富语言标签 0~2 个放对应词语位置；**平铺直叙也必须放中性底色标签**（[serious] /
+        [tired]）——不再有「不打标签」的合法出口，配合本地兜底（也无线索时给 [serious]）
+        实现「每次都有标签 + 指令」。
+      * 实测：5 句样张 100% 主模型产出官方标签 0 兜底——傲娇「哼，才不是为你，只是顺路
+        而已。」→ `[mischievously]` + 「语气傲娇，嘴硬里藏着关心」；平铺直叙「好的，明天
+        九点开会。」→ `[serious]` + 中性指令；催促句内 [very fast]→[serious] 切换。
+    - 官方标签语义/用法见 non-realtime-tts-user-guide「情感与富语言标签」一节；
+      参数范围（rate/pitch/volume/language_hints/seed/hot_fix 等）见
+      non-realtime-qwen-audio-tts-http-api（`seed` 固定随机种子、`hot_fix` 多音字/
+      替换——未接入，需要时再加）。
+    - **TTS 推荐默认（第五轮，用户要求「百炼设为默认并标注推荐」）**：
+      `SLOT_ENGINES[SLOT_TTS]` 重排为 `[dashscope, edge-tts, openai]`（首位=界面默认
+      选中），`SLOT_DEFAULT_ENGINE[SLOT_TTS]`、`common/config.py` DEFAULTS 的 tts 段、
+      `config.example.yaml` 全部改为 dashscope + qwen-audio-3.1-tts-flash +
+      yuxiaoyun_v3.1 + 百炼地址；`_engine_label` 对 tts 的 dashscope 标注「（推荐）」；
+      `ProviderSlotForm.set_values` 对**完全未配置**的 tts（base/model/voice 全空且
+      引擎为空或 dashscope）自动填推荐组合（用户只需粘贴 Key）；
+      `load_slot` 的 dashscope 无音色回退从 Cherry 改为 yuxiaoyun_v3.1（与推荐模型
+      同系列，Cherry 是 qwen3-tts 系，混用会 411）；模型占位文案改 qwen-audio-
+      3.1-tts-flash；预设名标注「（推荐）」。
+      gui_smoke 引擎切换测试改用 `SLOT_ENGINES[SLOT_TTS].index(...)` 取索引（不写死
+      位置）；「切回 edge-tts 后等全量音色」处加了**去重补刷**：TaskRunner 按
+      `media_voices_<form>` key 去重，切引擎瞬间上一轮刷新还在跑时本轮刷新会被跳过，
+      等空闲后 `count<=100` 再手动 `_refresh_voice_list()` 一次（实测抓到的时序坑）。
+
+39. **页面宽度守卫：任何「不换行的长单行文本」都会把滚动页撑宽裁掉右侧（V0.2，用户反馈
+    「点 TTS 测试线路后页面突然左移、显示不全」定位）**：
+    - 机制：`QScrollArea.setWidgetResizable(True)` 时，Qt 把滚动内容宽度取
+      `max(视口宽, 内容.minimumSizeHint 宽)`。内容最小宽度 = 布局里各子控件最小宽度之和，
+      **QLabel 最小宽度 = 整句文本宽度（不换行时）、QComboBox 最小宽度 = 当前项文本宽度**。
+      所以一句 1474px 的提示标签（TTS 百炼参数说明）能把模型路由页撑到 2553px
+      （视口只有 898px）：右侧控件被裁、无横向滚动条（AlwaysOff），引擎切换/刷新引发
+      显隐变化时用户看到的就是「页面突然左移偏移」。
+    - 定位方法（可复用）：offscreen 起窗口 → 逐页 `show_page` + `ensure_loaded` →
+      对页面里每个 QScrollArea 比较 `scroll.widget().width()` 与 `viewport().width()`，
+      超出的页再用 minW 递归遍历（`minimumSizeHint().width() > 阈值` 逐层下钻）找元凶控件。
+      临时探针已删，需要时照此重写（模式见本条与 gui_smoke 的宽度守卫）。
+    - 修复两层：
+      * **结构性（根本）**：所有可滚动页面的内容容器
+        （`app/pages/base.py` 的 `container`、`app/pages/bots.py` 的 `form_host`、
+        `app/pages/characters.py` 的 `form_container`、`app/onboarding.py` 各步骤页）
+        设 `QSizePolicy.Policy.Ignored`（宽向）+ `setMinimumWidth(0)`——内容允许收缩到
+        比子控件最小宽度更窄，长文本只在自己内部裁行/截断，不再顶宽整页。
+        **PySide6 注意：`Qt.SizePolicy` 不存在，要用 `QSizePolicy.Policy.Ignored`**；
+        且 Ignored 对 `QScrollArea` 的 `minimumSizeHint` 传播有效（Qt 布局的
+        effectiveMinimumSize 认 size policy）。
+      * **具体控件**（缩小最小宽度，观感更好）：`provider_form.py` 百炼提示标签
+        单独一行 + `setWordWrap(True)`（调教行拆成内层 HBox + 外层 VBox）、
+        各 spin `setMinimumWidth(72)`、dashscope 引擎标签缩短为「阿里云百炼 DashScope（推荐）」；
+        `settings.py` 生成参数行拆两行（max_tokens/temperature 一行、top_p 一行）+
+        路径标签 `setWordWrap(True)`；`qq_form.py` `in_target_openid` 320→230px。
+    - 防回归：`tests/gui_smoke.py` 开头新增**全页面宽度守卫**（逐页切页 + 检查所有
+      QScrollArea 的 `widget().width() <= viewport().width()+2`）。
+      **注意该守卫切页会触发 `_on_nav_changed → ensure_loaded`**：对话查看页若在此时
+      首次加载（库里还没消息），表格会自动选中当时第 0 行（空会话角色）——
+      所以对话章节必须「循环 `refresh()` 直到表格第 0 行 `message_count >= 2`」
+      （refresh 按 `load_conversations` key 去重，旧任务在跑时新刷新被静默跳过，
+      重试是必须的），再 `clearSelection() + selectRow(0)`（不清空则对同一行是无效操作）。
+    - 顺带修的产品缺陷：`conversations.py` 的 `refresh()._ok` 重新填充表格
+      （`setRowCount`）会清掉现有选中，而旧逻辑只在 `current_character_id is None` 时
+      自动选——用户点「刷新」后消息面板会停在旧角色上。现在 `_ok` 记住 prev_id，
+      填充后按该角色**跟回选中行**（角色已不存在则回落到第 0 行；列表清空时
+      `current_character_id` 置 None）。
 
 ---
 
@@ -291,10 +744,24 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.1.exe（组装 payload → 
 - 仅 Windows（托盘、注册表、快捷方式、安装包都是 Windows 专有实现）。
 - 仅 QQ 官方机器人：受平台限制，**主动消息只能发给已经与机器人交互过的 openid**（程序会自动学习并记录目标 openid）。
 - 单机运行，控制接口只监听 `127.0.0.1`。
-- 没有真实账号的自动化测试：官方通道全部靠 mock（`tests/mock_servers.py`）。
+- 没有真实账号的自动化测试：官方通道（含 V0.2 富媒体）全部靠 mock（`tests/mock_servers.py`），**真实 QQ 上发图/语音仍需在真机验证**。
+- V0.2 富媒体依赖各线路端点的 OpenAI 兼容实现；不同厂商对 `image_url`（data URL vs http）、
+  `/images/generations` 返回字段（`b64_json` vs `url`）、TTS `voice` 取值的支持程度不同，
+  代码已做了常见分支的兜底，但**换厂商时要用「模型路由」页的「测试线路」逐个验证**。
 
 **待办 / 可做**
 
+- [ ] **V0.2 真机验证**：用户用真实 QQ + 真实线路跑通「看图 / 回语音 / [IMG] 发图」全链路，
+  验证通过后由用户明确指令再打包（`scripts\build.bat` + `build_installer.bat`）并发 Release。
+  「听语音」零配置（官方平台参考转写），真机重点确认**有参考转写时角色能听懂**（已验证过一次：
+  11:05 语音消息日志里出现参考转写并正常回复）；「[IMG] 发图」用 Gemini 时选**原生接口预设**
+  （nano banana 2 系列，已用真实 Key 实测出图，见坑 29 与 worktree 根目录实测图），真机确认一次即可。
+  顺带验证「模型路由」的服务商预设与「获取模型列表」在真实端点上的表现，以及本轮新增的
+  **角色管理界面改动**（音色对话框的角色级调节 + 试听、点头像换图、绑定菜单位置、编辑窗口滚动条、
+  模型路由音色下拉是否为全量 300+）与**页面宽度修复**（点 TTS「测试线路」/ 切换引擎 /
+  刷新各页后页面不再左移偏移、右侧不再显示不全，见坑 39；窄窗口 1160×760 下重点看
+  「机器人」「系统设置」两页）。
+  另：用户曾贴过 Gemini Key（`AQ.` 前缀）用于实测，**发版前提醒用户去 AI Studio 轮换该 Key**。
 - [ ] **在真机用真实官方机器人跑一遍完整链路**（配置 → 连接 → 收消息 → 回复 → 主动消息），目前只有 mock 覆盖。
 - [ ] README 增加界面截图（对下载转化帮助很大，需人工提供图片）。
 - [x] `SECURITY.md` 的联系方式已改为作者公开的 QQ / 微信（与 README 一致）。

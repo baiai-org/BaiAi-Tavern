@@ -42,6 +42,10 @@ OPEN_SOURCE_PROJECTS: List[Tuple[str, str, str]] = [
     ("Pillow", "角色卡图片处理", "https://python-pillow.org/"),
     ("PyInstaller", "打包为 Windows 可执行文件", "https://pyinstaller.org/"),
     ("Tkinter / Tcl-Tk", "安装 / 卸载向导的界面（Python 标准库）", "https://docs.python.org/3/library/tkinter.html"),
+    ("edge-tts", "本地免费文字转语音引擎（微软 Edge 在线服务，无需 API Key，按角色指定音色）", "https://github.com/rany2/edge-tts"),
+    ("python-multipart", "FastAPI 表单 / 文件上传解析（头像上传等接口依赖）", "https://pypi.org/project/python-multipart/"),
+    ("tzlocal", "系统时区判定（定时主动消息按本地时区执行）", "https://pypi.org/project/tzlocal/"),
+    ("SillyTavern", "角色卡格式参照（chara_card_v2，导入 / 导出兼容）", "https://github.com/SillyTavern/SillyTavern"),
 ]
 
 

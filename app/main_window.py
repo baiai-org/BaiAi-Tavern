@@ -35,6 +35,7 @@ from .pages import (
     ConversationsPage,
     DashboardPage,
     LogsPage,
+    ModelsPage,
     Page,
     ProactivePage,
     SettingsPage,
@@ -50,6 +51,7 @@ NAV_ITEMS = [
     ("仪表盘", DashboardPage),
     ("机器人", BotsPage),
     ("角色管理", CharactersPage),
+    ("模型路由", ModelsPage),
     ("主动消息", ProactivePage),
     ("对话查看", ConversationsPage),
     ("系统设置", SettingsPage),
@@ -57,13 +59,23 @@ NAV_ITEMS = [
 ]
 
 # 导航项的关键字（托盘菜单等地方按名字跳转，避免写死下标）
-NAV_KEYS = ["dashboard", "bots", "characters", "proactive", "conversations", "settings", "logs"]
+NAV_KEYS = [
+    "dashboard",
+    "bots",
+    "characters",
+    "models",
+    "proactive",
+    "conversations",
+    "settings",
+    "logs",
+]
 
 # 导航图标（用 QPainter 画，不用 emoji：避免系统缺字形时显示成方块）
 NAV_ICONS = {
     "dashboard": "chart",
     "bots": "robot",
     "characters": "user",
+    "models": "chip",
     "proactive": "message",
     "conversations": "message",
     "settings": "gear",
@@ -103,6 +115,8 @@ class MainWindow(QMainWindow):
         self._tray_tip_shown = False
         self._started_at = time.time()
         self.onboarding: Optional[OnboardingWizard] = None
+        self._install_update_dialog = None
+        self._update_notice = None
 
         self._build_ui()
         self._build_tray()
@@ -112,6 +126,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(900, self._auto_start)
         if allow_onboarding:
             QTimer.singleShot(1200, self.maybe_show_onboarding)
+        # 启动后后台检查一次 GitHub 更新（限流 6 小时，「不再提示」时跳过）
+        QTimer.singleShot(6000, self.maybe_check_update)
 
     # ============================================================== UI 构建
     def _build_ui(self) -> None:
@@ -153,14 +169,19 @@ class MainWindow(QMainWindow):
         self.sidebar_status.setWordWrap(True)
         sidebar_layout.addWidget(self.sidebar_status)
 
-        # 左下角「关于」：应用信息 + 引用的开源项目（1. 2. 3. … 带链接）
+        # 左下角「安装与更新」+「关于」：生命周期入口（版本 / 更新 / 卸载 / 开源项目）
         about_row = QHBoxLayout()
         about_row.setContentsMargins(12, 2, 12, 8)
         about_row.setSpacing(6)
+        self.btn_install_update = ghost_button("安装与更新", sidebar)
+        set_icon(self.btn_install_update, "refresh")
+        self.btn_install_update.setToolTip("版本 / 检查更新 / 重装 / 卸载")
+        self.btn_install_update.clicked.connect(self.show_install_update)
         self.btn_about = ghost_button("关于", sidebar)
         set_icon(self.btn_about, "wand")
         self.btn_about.setToolTip("%s %s · %s" % (APP_DISPLAY_NAME, APP_VERSION_DISPLAY, APP_AUTHOR))
         self.btn_about.clicked.connect(lambda: show_about(self))
+        about_row.addWidget(self.btn_install_update)
         about_row.addWidget(self.btn_about)
         about_row.addStretch(1)
         sidebar_layout.addLayout(about_row)
@@ -431,6 +452,78 @@ class MainWindow(QMainWindow):
             on_error=lambda message: self.notify_user(label, "%s失败：%s" % (label, message), "error"),
             label=label,
         )
+
+    # ============================================================== 更新检查
+    def maybe_check_update(self) -> None:
+        """启动时后台检查 GitHub Releases 是否有新版本（安静失败，不打扰）。"""
+        from . import updater
+
+        config = self.ctx.config
+        if not bool(config.get("app.update_check_enabled", True)):
+            return  # 用户选了「不再提示」
+        if not updater.should_auto_check(config.get):
+            return  # 6 小时内查过，不重复查
+
+        def _work():
+            return updater.check_latest(APP_VERSION_DISPLAY)
+
+        self.ctx.run_task(
+            _work,
+            on_ok=self._on_startup_update_check,
+            on_error=lambda message: log.debug("启动更新检查失败（忽略）：%s", message),
+            key="startup_update_check",
+            label="启动时检查更新",
+        )
+
+    def _on_startup_update_check(self, info: Dict) -> None:
+        from . import updater
+
+        try:
+            updater.record_check(self.ctx.config)
+        except Exception:
+            pass
+        if not isinstance(info, dict) or not info.get("newer"):
+            return
+        skipped = str(self.ctx.config.get("app.update_skipped_version", "") or "")
+        if skipped and updater.normalize_version(skipped) == str(info.get("latest_display") or ""):
+            return  # 用户跳过的是这个版本
+        if self.onboarding is not None:
+            return  # 配置引导还没走完，不叠加弹窗；下次启动再提示
+
+        self._show_update_notice(info)
+
+    def _show_update_notice(self, info: Dict) -> None:
+        from .lifecycle import UpdateNoticeDialog
+
+        notice = UpdateNoticeDialog(self.ctx, info, self)
+        notice.open_update_requested.connect(self.show_install_update)
+        notice.finished.connect(lambda _r: notice.deleteLater())
+        self._update_notice = notice
+        notice.show()
+        notice.raise_()
+        notice.activateWindow()
+
+    def show_install_update(self) -> None:
+        """打开「安装与更新」一体窗口（重复调用时复用同一个窗口）。"""
+        from .lifecycle import InstallUpdateDialog
+
+        existing = self._install_update_dialog
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+        dialog = InstallUpdateDialog(self.ctx, self)
+        dialog.finished.connect(self._on_install_update_closed)
+        self._install_update_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_install_update_closed(self, _result: int) -> None:
+        dialog = self._install_update_dialog
+        self._install_update_dialog = None
+        if dialog is not None:
+            dialog.deleteLater()
 
     # ============================================================== 窗口行为
     def show_window(self) -> None:

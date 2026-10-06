@@ -135,7 +135,7 @@ class LLMConfigForm(QWidget):
         self.lbl_models_count.setObjectName("HintLabel")
         self.edit_filter = QLineEdit(list_row)
         self.edit_filter.setPlaceholderText("筛选模型名…")
-        self.edit_filter.setFixedWidth(160)
+        self.edit_filter.setFixedWidth(130)
         self.edit_filter.textChanged.connect(lambda _t: self._refresh_model_list())
         self.chk_show_all = QCheckBox("含非对话模型", list_row)
         self.chk_show_all.toggled.connect(lambda _c: self._refresh_model_list())

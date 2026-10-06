@@ -31,6 +31,7 @@ log = get_logger("bot.qq_official.client")
 
 MSG_TYPE_TEXT = 0
 MSG_TYPE_MARKDOWN = 2
+MSG_TYPE_RICH_MEDIA = 7  # 富媒体（图片/视频/语音），media.file_info 来自上传接口
 
 # 需要给出可读提示的业务错误码
 ERROR_HINTS = {
@@ -300,6 +301,110 @@ class OfficialQQClient:
             body["msg_id"] = msg_id
             body["msg_seq"] = msg_seq
         return await self.request("POST", "/v2/groups/%s/messages" % group_openid, json=body)
+
+    # ------------------------------------------------------------------ 富媒体
+    def _media_path(self, is_group: bool, peer_id: str, suffix: str) -> str:
+        prefix = "/v2/groups/%s" % peer_id if is_group else "/v2/users/%s" % peer_id
+        return prefix + suffix
+
+    async def upload_media_b64(
+        self,
+        is_group: bool,
+        peer_id: str,
+        file_type: int,
+        data: bytes,
+        file_name: str = "",
+    ) -> Dict[str, Any]:
+        """base64 直传文件，返回 ``{file_uuid, file_info, ttl, raw_url}``。
+
+        官方 SDK 示例采用的方式，小文件（图片 / 语音，通常 <10MB）最稳妥。
+        ``file_type``：1=图片(png/jpg) 2=视频(mp4) 3=语音(silk/mp3/wav) 4=文件。
+        """
+        import base64 as _b64
+
+        body: Dict[str, Any] = {
+            "file_type": int(file_type),
+            "file_data": _b64.b64encode(data).decode("ascii"),
+            "srv_send_msg": False,
+        }
+        if file_name:
+            body["file_name"] = file_name
+        data_out = await self.request(
+            "POST", self._media_path(is_group, peer_id, "/files"), json=body, retries=1
+        )
+        return data_out or {}
+
+    async def upload_prepare(
+        self,
+        is_group: bool,
+        peer_id: str,
+        file_type: int,
+        file_size: int,
+        file_name: str,
+        md5: str,
+        sha1: str,
+        md5_10m: str,
+    ) -> Dict[str, Any]:
+        """分片上传第 1 步：申请 upload_id 与各分片预签名 URL。"""
+        body = {
+            "file_type": int(file_type),
+            "file_size": str(int(file_size)),
+            "file_name": file_name,
+            "md5": md5,
+            "sha1": sha1,
+            "md5_10m": md5_10m,
+        }
+        return await self.request(
+            "POST", self._media_path(is_group, peer_id, "/upload_prepare"), json=body
+        )
+
+    async def upload_part_finish(
+        self,
+        is_group: bool,
+        peer_id: str,
+        upload_id: str,
+        part_index: int,
+        block_size: str = "",
+        md5: str = "",
+    ) -> Dict[str, Any]:
+        """分片上传第 2 步：通知服务端某个分片已上传完成。"""
+        body: Dict[str, Any] = {"upload_id": upload_id, "part_index": int(part_index)}
+        if block_size:
+            body["block_size"] = str(block_size)
+        if md5:
+            body["md5"] = md5
+        return await self.request(
+            "POST", self._media_path(is_group, peer_id, "/upload_part_finish"), json=body
+        )
+
+    async def upload_media_merge(
+        self, is_group: bool, peer_id: str, file_type: int, upload_id: str, file_name: str = ""
+    ) -> Dict[str, Any]:
+        """分片上传第 3 步：携带 upload_id 完成合并，返回 file_info。"""
+        body: Dict[str, Any] = {"file_type": int(file_type), "upload_id": upload_id}
+        if file_name:
+            body["file_name"] = file_name
+        return await self.request(
+            "POST", self._media_path(is_group, peer_id, "/files"), json=body
+        )
+
+    async def send_media(
+        self,
+        is_group: bool,
+        peer_id: str,
+        file_info: str,
+        msg_id: str = "",
+        msg_seq: int = 1,
+    ) -> Dict[str, Any]:
+        """发送富媒体消息（msg_type=7）。``file_info`` 来自上传接口的返回值，直接透传。"""
+        body: Dict[str, Any] = {
+            "msg_type": MSG_TYPE_RICH_MEDIA,
+            "media": {"file_info": file_info},
+        }
+        if msg_id:
+            body["msg_id"] = msg_id
+            body["msg_seq"] = msg_seq
+        return await self.request("POST", self._media_path(is_group, peer_id, "/messages"), json=body)
 
     async def probe(self) -> Dict[str, Any]:
         """连通性探测：凭证 → 机器人信息 → 网关地址。"""

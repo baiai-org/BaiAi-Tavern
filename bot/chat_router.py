@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from common.logging_setup import get_logger
 from common.utils import truncate
 
 from .ai_engine import REPLY_FALLBACK
 from .database import crud
+from .media.hub import MediaInbound, OutgoingReply
 
 log = get_logger("bot.chat_router")
 
@@ -49,8 +50,9 @@ class IncomingMessage:
         return "%s:private:%s" % (self.source, self.peer_id)
 
 
-# 回复回调：``async def reply(text, character, incoming) -> bool``
-ReplyFn = Callable[[str, Dict[str, Any], IncomingMessage], Awaitable[bool]]
+# 回复回调：``async def reply(out, character, incoming) -> bool``
+# ``out`` 是 :class:`OutgoingReply`（文字/语音 + 可选图片），由通道负责真正发出。
+ReplyFn = Callable[[OutgoingReply, Dict[str, Any], IncomingMessage], Awaitable[bool]]
 
 
 async def select_character(
@@ -112,10 +114,16 @@ async def handle_incoming(
     reply: ReplyFn,
     bot: Any = None,
 ) -> Optional[str]:
-    """核心链路：入库 → 选角色 → 生成 → 发送 → 记录。返回回复文本（失败返回 None）。"""
+    """核心链路：入库 → 选角色 → 多媒体解析 → 生成 → 组装 → 发送 → 记录。
+
+    返回回复文字（失败返回 None）。
+    """
     config = runtime.config
     text = (incoming.text or "").strip()
-    if not text:
+    raw = incoming.raw or {}
+    attachments = raw.get("attachments") if isinstance(raw, dict) else None
+    has_attachments = isinstance(attachments, list) and len(attachments) > 0
+    if not text and not has_attachments:
         return None
     spec = getattr(bot, "spec", None)
     reply_enabled = (
@@ -138,7 +146,7 @@ async def handle_incoming(
         "群聊" if incoming.is_group else "私聊",
         incoming.peer_id,
         ("（机器人：%s）" % getattr(bot, "name", "")) if bot is not None else "",
-        truncate(user_text, 60),
+        truncate(user_text or "（图片/语音消息）", 60),
     )
 
     hint = ""
@@ -147,15 +155,44 @@ async def handle_incoming(
     else:
         hint = "【当前场景】这是 QQ 单聊（官方机器人通道）。"
 
-    content = await runtime.engine.reply(character, user_text, chat_hint=hint)
+    # ------------------------------------------------------------ 入站多媒体
+    hub = getattr(runtime, "media", None)
+    image_paths: List[str] = []
+    if hub is not None:
+        try:
+            media: Optional[MediaInbound] = await hub.inbound_media(incoming)
+            if media is not None:
+                image_paths = list(media.image_paths)
+                note = media.text_note()
+                if note:
+                    user_text = (user_text + " " + note).strip() if user_text else note
+        except Exception as exc:
+            log.warning("入站多媒体处理失败（按纯文字继续）：%s", exc)
+        media_hint = hub.media_hint()
+        if media_hint:
+            hint = (hint + "\n" + media_hint).strip()
+
+    llm_text = user_text or (text or "（对方发来了一条消息）")
+    content = await runtime.engine.reply(
+        character, llm_text, chat_hint=hint, image_paths=image_paths or None
+    )
     degraded = False
     if not content:
         content = REPLY_FALLBACK
         degraded = True
 
+    # ------------------------------------------------------------ 出站组装
+    out = OutgoingReply(text=content, body=content)
+    if hub is not None:
+        try:
+            out = await hub.compose(character, content)
+        except Exception as exc:
+            log.warning("出站消息组装失败（按纯文字继续）：%s", exc)
+            out = OutgoingReply(text=content, body=content)
+
     sent = False
     try:
-        sent = await reply(str(content), character, incoming)
+        sent = await reply(out, character, incoming)
     except Exception as exc:  # pragma: no cover - 发送失败不应影响后续消息
         log.error("回复发送失败：%s", exc)
         runtime.note_error("回复发送失败：%s" % exc)
@@ -164,23 +201,26 @@ async def handle_incoming(
     await crud.set_setting(
         runtime.db, "session:%s:last_character" % session_key, str(character.get("id") or "")
     )
-    runtime.note_reply(str(content), str(character.get("name") or ""))
+    runtime.note_reply(str(out.text), str(character.get("name") or ""))
     runtime.publish(
         {
             "type": "reply_sent",
             "character": character.get("name"),
             "character_id": character.get("id"),
-            "content": content,
+            "content": out.text,
             "degraded": degraded,
             "sent": sent,
             "chat_type": "group" if incoming.is_group else "private",
             "source": incoming.source,
             "peer_id": incoming.peer_id,
+            "inbound_image": image_paths is not None and len(image_paths) > 0,
+            "outbound_image": bool(out.image_path),
+            "outbound_voice": bool(out.voice_paths),
             "bot_id": getattr(bot, "id", ""),
             "bot_name": getattr(bot, "name", ""),
         }
     )
-    return str(content)
+    return str(out.text)
 
 
 def strip_mentions(text: str, bot_id: str = "") -> str:

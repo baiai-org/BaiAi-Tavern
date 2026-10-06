@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 APP_NAME = "BaiAi-Tavern"
-APP_VERSION = "V0.1"
+APP_VERSION = "V0.2"
 APP_AUTHOR = "baiai.org"
 APP_HOMEPAGE = "https://baiai.org"
 APP_DESCRIPTION = "QQ 多角色 AI 主动消息桌面应用（接入 QQ 官方机器人）"

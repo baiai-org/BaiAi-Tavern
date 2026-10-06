@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -89,6 +90,10 @@ class BotsPage(Page):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.form_host = QWidget(self.scroll)
+        # 右侧表单列允许收缩到比内容最小宽度更窄（窄窗口下左侧列表占宽），
+        # 否则表单的最小宽度会把滚动内容撑宽、水平方向被裁
+        self.form_host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.form_host.setMinimumWidth(0)
         self.form_layout = QVBoxLayout(self.form_host)
         self.form_layout.setContentsMargins(0, 0, 8, 0)
         self.form_layout.setSpacing(12)

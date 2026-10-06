@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -241,6 +242,9 @@ class OnboardingWizard(QDialog):
             scroll = QScrollArea(self)
             scroll.setWidgetResizable(True)
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # 与主页面一致：内容可收缩，防止不换行的长文本把步骤页撑宽裁掉右侧
+            page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            page.setMinimumWidth(0)
             scroll.setWidget(page)
             self.stack.addWidget(scroll)
 
@@ -519,6 +523,9 @@ class OnboardingWizard(QDialog):
                 item.set_state("todo")
         self.btn_back.setEnabled(index > 0)
         self.btn_next.setText("完成" if index == self.last_index else "下一步")
+        # 最后一步是「确认一下」：此时要么完成、要么返回，
+        # 「取消引导」留着会让人误以为引导已经结束了，隐藏掉（Esc / 关窗仍等价于跳过）
+        self.btn_cancel.setVisible(index != self.last_index)
         self.lbl_footer_hint.setText("第 %d / %d 步" % (index + 1, self.step_count))
         self._on_step_entered(keys[index])
 
@@ -811,11 +818,14 @@ class OnboardingWizard(QDialog):
             label="通知 Bot 重载配置",
         )
         official = (patch.get("qq") or {}).get("official") or {}
+        llm_values = patch.get("llm") or {}
+        # 注意：_collect() 会过滤掉空值（避免用空串覆盖已有配置），
+        # 所以 LLM 一项可能根本没有 api_key 键（用户留空直接完成），这里必须用 .get()
         log.info(
             "配置引导完成：LLM=%s，QQ 官方 AppID=%s，主动消息=%s",
-            bool(patch["llm"]["api_key"]),
+            bool(llm_values.get("api_key")),
             bool(str(official.get("app_id") or "").strip()),
-            patch["proactive"]["enabled"],
+            bool((patch.get("proactive") or {}).get("enabled")),
         )
         self.finished_setup.emit(patch)
         self.accept()

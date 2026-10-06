@@ -385,6 +385,9 @@ def phase_gui_exe(checker, mock) -> None:
             "QQAI_DATA_DIR": str(data_dir),
             "QT_QPA_PLATFORM": "offscreen",
             "PYTHONIOENCODING": "utf-8",
+            # 单实例锁是机器级命名键：用户正在运行安装版时，默认键已被占用，
+            # 测试实例抢锁失败会弹模态框卡死（界面拉起 bot 超时）。用唯一键隔离。
+            "BAIAI_INSTANCE_SUFFIX": "frozen-%d" % os.getpid(),
         }
     )
 

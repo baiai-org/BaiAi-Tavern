@@ -26,6 +26,11 @@ CHARACTER_FIELDS = (
     "avatar_path",
     "source_path",
     "card_spec",
+    "tts_voice",
+    "tts_rate",
+    "tts_pitch",
+    "tts_volume",
+    "tts_speed",
     "enabled",
     "sort_order",
 )
@@ -133,6 +138,8 @@ async def add_message(
     content: str,
     is_proactive: bool = False,
     created_at: Optional[str] = None,
+    kind: str = "text",
+    media_path: str = "",
 ) -> int:
     return await db.insert(
         "messages",
@@ -140,6 +147,8 @@ async def add_message(
             "character_id": character_id,
             "role": role,
             "content": content,
+            "kind": kind or "text",
+            "media_path": media_path or "",
             "is_proactive": 1 if is_proactive else 0,
             "created_at": created_at or iso_now(),
         },

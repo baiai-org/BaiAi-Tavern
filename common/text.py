@@ -14,6 +14,8 @@ from .utils import jitter
 # 模型偶尔会把控制字符或“工具调用残留”混进正文，先清掉
 _CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _CQ_PATTERN = re.compile(r"\[CQ:", re.IGNORECASE)
+# 角色卡（Chub 等）的开场白常带 Markdown 图片链接，QQ 纯文本通道里是噪音
+_MD_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\((?:https?://[^\s)]+|data:[^\s)]+)\)")
 _PREFIX_PATTERNS = [
     re.compile(r"^\s*(?:assistant|system|user)\s*[:：]\s*", re.IGNORECASE),
     re.compile(r"^\s*(?:回复|回答|消息|输出)\s*[:：]\s*"),
@@ -40,7 +42,9 @@ def sanitize_text(text: str, character_name: str = "") -> str:
             text = text[1:-1].strip()
     # 方括号里的 CQ 码是旧版 OneBot 的语法，转义掉避免被当成指令
     text = _CQ_PATTERN.sub("［CQ:", text)
-    return text.strip()
+    # 开场白/回复里的 Markdown 图片（角色卡自带）在 QQ 纯文本里只是链接噪音
+    text = _MD_IMAGE_PATTERN.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def split_message(text: str, max_len: int = 200, max_segments: int = 3) -> List[str]:

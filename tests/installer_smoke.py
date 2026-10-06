@@ -11,7 +11,7 @@
 2. **主程序卸载路径**：模拟「设置 → 应用」点卸载（安装目录里的主程序 ``--uninstall``），
    验证卸载信息立刻消失、程序文件被清理、正在运行的自己由延迟批处理删掉；
 3. **升级安装**：旧版本还在运行时也要能装上（先自动关掉被占用进程）；
-4. **成品模式**（存在 ``dist\\BaiAi-Tavern V0.1.exe`` 时执行）：
+4. **成品模式**（存在 ``dist\\BaiAi-Tavern V0.2.exe`` 时执行）：
    用真实安装包装一次、再用装出来的主程序 ``--uninstall`` 卸一次。
 
 所有操作都指向临时目录与独立的注册表项，不会影响机器上真实的安装。
@@ -76,7 +76,7 @@ def wait_until(predicate, seconds: float = 30.0) -> bool:
     return predicate()
 
 
-def gui_alive(exe: Path, wait: float = 8.0) -> bool:
+def gui_alive(exe: Path, wait: float = 8.0, env: Optional[Dict[str, str]] = None) -> bool:
     """打开图形界面，等几秒确认它还活着，再连子进程一起结束掉。
 
     只验证「窗口能打开、不是一闪就退」（打包漏了 tkinter / Tcl 会在这里暴露），
@@ -91,6 +91,7 @@ def gui_alive(exe: Path, wait: float = 8.0) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=0x08000000 if os.name == "nt" else 0,
+            env=env,
         )
     except Exception:
         return False
@@ -127,11 +128,227 @@ def run_silent(module: str, args: List[str], env: Optional[Dict[str, str]] = Non
     )
 
 
+def run_update_phase(tmp: Path, checker) -> None:
+    """更新系统自检：版本比较 / 附件挑选 / SHA256 / 下载与进度 / 限流 / 静默安装拉起。
+
+    用一个本地 HTTP 服务冒充 GitHub API + 下载源，不依赖外网。
+    """
+    import http.server
+    import threading
+
+    from app import updater
+
+    # ------------------------------------------------------------ 版本解析与比较
+    checker.check(
+        "版本号解析（V0.2 / v0.10.1 / 无数字）",
+        updater.parse_version("V0.2") == (0, 2)
+        and updater.parse_version("v0.10.1") == (0, 10, 1)
+        and updater.parse_version("abc") == (),
+        str(updater.parse_version("v0.10.1")),
+    )
+    checker.check(
+        "新版判定（0.3>0.2，0.10>0.9 按数字比较，无法比较时不算新）",
+        updater.is_newer("v0.3", "V0.2") is True
+        and updater.is_newer("v0.2", "V0.2") is False
+        and updater.is_newer("v0.10", "V0.9") is True
+        and updater.is_newer("abc", "V0.2") is False,
+        "",
+    )
+    checker.check(
+        "版本号显示归一化（v0.3 → V0.3）",
+        updater.normalize_version("v0.3") == "V0.3"
+        and updater.normalize_version("release 0.10") == "V0.10",
+        str(updater.normalize_version("v0.3")),
+    )
+
+    # ------------------------------------------------------------ Release 附件挑选
+    fake_release = {
+        "tag_name": "v0.3",
+        "html_url": "https://github.com/baiai-org/BaiAi-Tavern/releases/tag/v0.3",
+        "body": "# V0.3\n\n- 更新系统\n- 一些修复",
+        "assets": [
+            {"name": "BaiAi-Tavern.exe", "browser_download_url": "http://127.0.0.1/x/main.exe"},
+            {"name": "SHA256SUMS.txt", "browser_download_url": "http://127.0.0.1/x/SHA256SUMS.txt"},
+            {"name": "BaiAi-Tavern-V0.3.exe", "browser_download_url": "http://127.0.0.1/x/BaiAi-Tavern-V0.3.exe"},
+            {"name": "README.md", "browser_download_url": "http://127.0.0.1/x/README.md"},
+        ],
+    }
+    asset = updater.pick_installer_asset(fake_release)
+    checker.check(
+        "从附件里挑出安装包（跳过主程序 EXE / 非 EXE）",
+        asset is not None and asset["name"] == "BaiAi-Tavern-V0.3.exe",
+        str(asset.get("name") if asset else None),
+    )
+    checker.check(
+        "能挑出 SHA256SUMS.txt（用于下载校验）",
+        (updater.pick_sums_asset(fake_release) or {}).get("name") == "SHA256SUMS.txt",
+        "",
+    )
+    space_release = {"tag_name": "v0.3", "assets": [{"name": "BaiAi-Tavern V0.3.exe", "browser_download_url": "http://x/y.exe"}]}
+    checker.check(
+        "带空格的安装包名也能认出来（历史命名兼容）",
+        (updater.pick_installer_asset(space_release) or {}).get("name") == "BaiAi-Tavern V0.3.exe",
+        "",
+    )
+    checker.check("Release 没有安装包附件时返回 None", updater.pick_installer_asset({"tag_name": "v0.3", "assets": []}) is None, "")
+
+    # ------------------------------------------------------------ SHA256 校验
+    sums_file = tmp / "verify"
+    sums_file.mkdir(parents=True, exist_ok=True)
+    sample = sums_file / "BaiAi-Tavern-V0.3.exe"
+    sample.write_bytes(b"fake-installer-bytes-for-verify")
+    real_hash = updater.sha256_file(sample)
+    checker.check(
+        "SHA256 校验：一致=True，不一致=False，找不到行=None（跳过）",
+        updater.verify_sha256(sample, "%s  BaiAi-Tavern-V0.3.exe\n" % real_hash) is True
+        and updater.verify_sha256(sample, "0" * 64 + "  BaiAi-Tavern-V0.3.exe\n") is False
+        and updater.verify_sha256(sample, "%s  Other.exe\n" % real_hash) is None,
+        real_hash[:16],
+    )
+
+    # ------------------------------------------------------------ 本地 GitHub 模拟：检查 + 下载
+    exe_bytes = b"fake-updater-installer-payload" * 4096  # ~80KB，模拟安装包
+    sums_text = "%s  BaiAi-Tavern-V0.3.exe\n" % updater.sha256_file(_write_bytes(sums_file / "real.exe", exe_bytes))
+    served = {
+        "BaiAi-Tavern-V0.3.exe": exe_bytes,
+        "SHA256SUMS.txt": sums_text.encode("utf-8"),
+    }
+    local_release = dict(fake_release)
+    local_release["assets"] = [
+        {"name": "BaiAi-Tavern-V0.3.exe", "browser_download_url": "http://127.0.0.1:PORT/x/BaiAi-Tavern-V0.3.exe"},
+        {"name": "SHA256SUMS.txt", "browser_download_url": "http://127.0.0.1:PORT/x/SHA256SUMS.txt"},
+    ]
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            if self.path.startswith("/api/"):
+                body = json.dumps(local_release).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            name = self.path.rsplit("/", 1)[-1]
+            data = served.get(name)
+            if data is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # /api 前缀 = GitHub API 路径；其余路径按文件名返回预置文件
+    api_base = "http://127.0.0.1:%d/api" % port
+    # 把占位符 PORT 换成真实端口
+    local_release = json.loads(json.dumps(local_release).replace("127.0.0.1:PORT", "127.0.0.1:%d" % port))
+
+    try:
+        checker.check(
+            "从模拟 GitHub API 拉到最新 Release",
+            updater.latest_release(api_base=api_base).get("tag_name") == "v0.3",
+            "",
+        )
+        info = updater.check_latest("V0.2", api_base=api_base)
+        checker.check(
+            "check_latest：发现新版且挑出安装包附件",
+            info.get("newer") is True
+            and info.get("latest_display") == "V0.3"
+            and (info.get("asset") or {}).get("name") == "BaiAi-Tavern-V0.3.exe",
+            str({k: info.get(k) for k in ("newer", "latest_display", "current_display")}),
+        )
+        checker.check("check_latest：已是最新时 newer=False", updater.check_latest("V0.3", api_base=api_base).get("newer") is False, "")
+
+        progress_calls: List[tuple] = []
+        download_dir = tmp / "download"
+        download_dir.mkdir(exist_ok=True)
+        path = updater.download(info["asset"]["browser_download_url"], dest_dir=download_dir,
+                                progress=lambda r, t: progress_calls.append((int(r), int(t or 0))))
+        checker.check(
+            "下载安装包成功且字节一致",
+            path.is_file() and path.read_bytes() == exe_bytes,
+            str(path),
+        )
+        checker.check(
+            "下载进度回调有上报且累计字节单调不减",
+            len(progress_calls) >= 1
+            and all(a <= b for a, b in zip([r for r, _ in progress_calls], [r for r, _ in progress_calls][1:])),
+            "上报 %d 次，最后 %s" % (len(progress_calls), progress_calls[-1] if progress_calls else "-"),
+        )
+        checker.check(
+            "按 SHA256SUMS.txt 校验下载文件通过",
+            updater.verify_sha256(path, sums_text) is True,
+            "",
+        )
+        try:
+            updater.latest_release(api_base="http://127.0.0.1:%d/none" % port)
+            checker.check("API 404 时抛出可读的 UpdateError", False, "未抛出异常")
+        except updater.UpdateError as exc:
+            checker.check("API 404 时抛出可读的 UpdateError", "Release" in str(exc) or "404" in str(exc) or "限流" in str(exc), str(exc))
+    finally:
+        server.shutdown()
+
+    # ------------------------------------------------------------ 启动检查限流
+    checker.check(
+        "启动检查限流：没查过=查，6 小时内=不查，超过=查，坏时间戳=查",
+        updater.should_auto_check(lambda key, default=None: default) is True
+        and updater.should_auto_check(lambda key, default=None: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))) is False
+        and updater.should_auto_check(lambda key, default=None: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 7 * 3600))) is True
+        and updater.should_auto_check(lambda key, default=None: "not-a-time") is True,
+        "",
+    )
+
+    # ------------------------------------------------------------ 静默安装拉起（.bat 冒充安装包）
+    launch_dir = tmp / "launch"
+    launch_dir.mkdir(exist_ok=True)
+    fake_bat = launch_dir / "fake-installer.bat"
+    fake_bat.write_text("@echo off\r\necho %* > marker.txt\r\n", encoding="ascii")
+    marker = launch_dir / "marker.txt"
+    old_cwd = os.getcwd()
+    os.chdir(launch_dir)
+    try:
+        updater.launch_installer(fake_bat, launch_dir / "target", launch_after=True)
+        checker.check(
+            "launch_installer 以 --silent --dir 拉起安装程序",
+            wait_until(marker.exists, seconds=15)
+            and "--silent" in marker.read_text(encoding="ascii")
+            and str(launch_dir / "target") in marker.read_text(encoding="ascii")
+            and "--no-run" not in marker.read_text(encoding="ascii"),
+            marker.read_text(encoding="ascii").strip() if marker.exists() else "（marker 未生成）",
+        )
+        if marker.exists():
+            marker.unlink()
+        updater.launch_installer(fake_bat, launch_dir / "target2", launch_after=False)
+        checker.check(
+            "重装 / 修复流程带 --no-run（装完不自动启动新版）",
+            wait_until(lambda: marker.exists() and "--no-run" in marker.read_text(encoding="ascii"), seconds=15),
+            marker.read_text(encoding="ascii").strip() if marker.exists() else "（marker 未生成）",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+def _write_bytes(path: Path, data: bytes) -> Path:
+    path.write_bytes(data)
+    return path
+
+
 def main() -> int:
     checker = smoke_test.Checker()
     print("安装程序自检开始（Python %s）" % sys.version.split()[0])
     tmp = Path(tempfile.mkdtemp(prefix="baiai-installer-"))
     payload = make_payload(tmp / "payload")
+    # 进程内直接调用 ic.install 的阶段（升级安装）也走同一份假 payload，
+    # 避免依赖 build\payload 是否存在（未打包的工作区里没有它）。
+    os.environ["BAIAI_PAYLOAD"] = str(payload)
     install_dir = tmp / "app"
     desktop = tmp / "desktop"
     startmenu = tmp / "startmenu"
@@ -140,7 +357,7 @@ def main() -> int:
 
     try:
         # ------------------------------------------------------ 第一阶段：源码模式
-        checker.phase("1/4 安装 / 卸载逻辑（源码模式）")
+        checker.phase("1/5 安装 / 卸载逻辑（源码模式）")
         result = run_silent(
             "installer.installer_main",
             [
@@ -272,7 +489,7 @@ def main() -> int:
         # ------------------------------- 主程序卸载走的那条路（删掉正在运行的自己）
         # 用户反馈过：从「设置 → 应用」或卸载向导卸载后，快捷方式和文件都没了，
         # 但应用列表里还留着 —— 原因是延迟自删除那条分支提前 return，跳过了删注册表。
-        checker.phase("2/4 主程序 --uninstall（删除正在运行的自己）")
+        checker.phase("2/5 主程序 --uninstall（删除正在运行的自己）")
         gui_dir = tmp / "self-uninstall"
         ic.install(
             install_dir=gui_dir,
@@ -349,7 +566,7 @@ def main() -> int:
         # 正在运行的 exe 会锁住自己，复制就报 Permission denied：
         #   "以下文件复制失败：bot.exe: [Errno 13] Permission denied: ..."
         # 安装程序必须先把安装目录里的旧进程关掉。
-        checker.phase("3/4 升级安装：旧版本还在运行时也要能装")
+        checker.phase("3/5 升级安装：旧版本还在运行时也要能装")
         busy_dir = tmp / "busy-install"
         ic.install(
             install_dir=busy_dir,
@@ -364,7 +581,9 @@ def main() -> int:
             cwd=str(busy_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
+            # 保持 stdin 是一条打开的管道：假 payload 里 bot.exe 是 cmd.exe 的替身，
+            # stdin 为 DEVNULL（EOF）时它读完就退出了，就锁不住自己的 exe。
+            stdin=subprocess.PIPE,
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
         time.sleep(2.0)
@@ -426,19 +645,29 @@ def main() -> int:
             env={"BAIAI_PAYLOAD": str(payload)},
         )
 
-        # ------------------------------------------------------ 第四阶段：成品 exe
+        # ------------------------------------------------------ 第四阶段：更新系统（V0.2）
+        checker.phase("4/5 更新系统（GitHub Releases 检查 / 下载 / 校验 / 静默安装）")
+        run_update_phase(tmp, checker)
+
+        # ------------------------------------------------------ 第五阶段：成品 exe
         installer_exe = ROOT / "dist" / SETUP_EXE_NAME
         if not installer_exe.exists():
-            checker.phase("4/4 安装包成品（未构建，跳过）")
+            checker.phase("5/5 安装包成品（未构建，跳过）")
             checker.check("安装包尚未构建（先执行 scripts\\build_installer.bat）", True)
             return checker.summary()
 
-        checker.phase("4/4 安装包成品（真实安装包 + 主程序卸载）")
+        checker.phase("5/5 安装包成品（真实安装包 + 主程序卸载）")
         real_dir = tmp / "real-install"
         real_desktop = tmp / "real-desktop"
         real_startmenu = tmp / "real-startmenu"
         real_desktop.mkdir(parents=True, exist_ok=True)
         real_startmenu.mkdir(parents=True, exist_ok=True)
+        # 成品阶段必须用安装包内嵌的真实 payload。源码模式阶段把
+        # BAIAI_PAYLOAD（cmd.exe 冒充的小体积假 payload）设进了全局环境变量，
+        # 子进程默认会继承——一旦泄漏，装出来的"主程序"就是 cmd.exe 副本，
+        # 它的 ``--uninstall --silent`` 什么也不做、直接退出码 0，
+        # 卸载逻辑根本没被验证（曾导致"自卸载后注册表项已清理"误报失败）。
+        clean_env = {k: v for k, v in os.environ.items() if k != "BAIAI_PAYLOAD"}
         run = subprocess.run(
             [
                 str(installer_exe),
@@ -459,13 +688,17 @@ def main() -> int:
             errors="replace",
             timeout=900,
             creationflags=0x08000000 if os.name == "nt" else 0,
+            env=clean_env,
         )
         checker.check("成品安装包可以静默安装", run.returncode == 0, (run.stdout or "")[-300:] + (run.stderr or "")[-200:])
         checker.check(
             "成品安装后主程序与 Bot 都在（不再有独立卸载程序）",
             (real_dir / ic.EXE_NAME).is_file()
             and (real_dir / ic.BOT_EXE_NAME).is_file()
-            and not (real_dir / ic.LEGACY_UNINSTALLER_NAME).exists(),
+            and not (real_dir / ic.LEGACY_UNINSTALLER_NAME).exists()
+            # 真实主程序是几十 MB 的 PyInstaller 单文件；假 payload 的
+            # cmd.exe 冒充体只有几百 KB——体积对不上说明装的不是真程序
+            and (real_dir / ic.EXE_NAME).stat().st_size > 1_000_000,
             str(sorted(p.name for p in real_dir.iterdir())[:10]) if real_dir.exists() else "（目录不存在）",
         )
         real_lnk = real_desktop / ("%s.lnk" % ic.APP_NAME)
@@ -490,7 +723,7 @@ def main() -> int:
         )
         checker.check(
             "成品安装包的图形界面能打开（tkinter 打进去了，不是一闪就退）",
-            gui_alive(installer_exe),
+            gui_alive(installer_exe, env=clean_env),
             "安装包：%s" % installer_exe.name,
         )
 
@@ -507,7 +740,7 @@ def main() -> int:
             creationflags=0x08000000 if os.name == "nt" else 0,
             # 主程序卸载时固定用默认注册表项；自检通过环境变量把它重定向到临时项，
             # 避免动到机器上真实的安装信息
-            env={**os.environ, "BAIAI_UNINSTALL_KEY": TEST_APP_KEY},
+            env={**clean_env, "BAIAI_UNINSTALL_KEY": TEST_APP_KEY},
         )
         checker.check("主程序可以静默卸载自己", run.returncode == 0, (run.stdout or "")[-300:])
         checker.check("主程序自卸载后注册表项已清理", not ic.read_uninstall_entry(TEST_APP_KEY), "")
@@ -530,10 +763,13 @@ def main() -> int:
         return 1
     finally:
         ic.remove_uninstall_entry(TEST_APP_KEY)
-        try:
-            shutil.rmtree(tmp, ignore_errors=True)
-        except Exception:
-            pass
+        if checker.failed and os.environ.get("BAIAI_KEEP_TESTDIR"):
+            print("（BAIAI_KEEP_TESTDIR 已设置，保留临时目录：%s）" % tmp)
+        else:
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

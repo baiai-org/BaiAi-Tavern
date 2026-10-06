@@ -6,8 +6,8 @@
 
 检查内容：
 
-* 主窗口与七个页面能正常构建，左下角「关于」按钮在导航下方；
-* 「关于」窗口显示名称 / V0.1 / baiai.org，开源清单按 1. 2. 3. 编号并带链接；
+* 主窗口与八个页面能正常构建，左下角「关于」按钮在导航下方；
+* 「关于」窗口显示名称 / V0.2 / baiai.org，开源清单按 1. 2. 3. 编号并带链接；
 * 状态轮询把 Bot 状态推送到界面（仪表盘卡片、状态栏、侧边栏）；
 * 图标全部是 QPainter 绘制或由 UI 资源生成，不依赖 emoji 字形；
 * 每个页面的文字排版都没有被裁切；
@@ -43,6 +43,7 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtWidgets import QLabel, QLineEdit  # noqa: E402
 
@@ -319,6 +320,14 @@ def truncation_report(page) -> List[str]:
 def main() -> int:
     from tests import card_factory, mock_servers, smoke_test
 
+    # 输出重定向到文件时 stdout 是块缓冲；Qt 析构偶发 abort（0xC0000409）会直接
+    # 杀进程，缓冲里的摘要就丢了——行缓冲保证「N 项通过」随时可见
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except Exception:
+        pass
+
     checker = Checker()
     print("BaiAi-Tavern GUI 集成自检开始（Python %s）" % sys.version.split()[0])
 
@@ -409,7 +418,7 @@ def main() -> int:
         pump(app, 0.5)
 
         checker.check("主窗口构建成功", window.isVisible())
-        checker.check("侧边栏包含 7 个页面", window.nav.count() == 7, str(window.nav.count()))
+        checker.check("侧边栏包含 8 个页面", window.nav.count() == 8, str(window.nav.count()))
 
         def page_by_key(key: str):
             """按导航关键字取页面（页面顺序变化时自检不用跟着改）。"""
@@ -419,9 +428,35 @@ def main() -> int:
 
         titles = [page.page_title for page in window.pages]
         checker.check(
-            "七个页面齐备（含机器人管理）",
-            titles == ["仪表盘", "机器人", "角色管理", "主动消息", "对话查看", "系统设置", "日志"],
+            "八个页面齐备（含机器人管理与模型路由）",
+            titles
+            == ["仪表盘", "机器人", "角色管理", "模型路由", "主动消息", "对话查看", "系统设置", "日志"],
             str(titles),
+        )
+        # 页面宽度守卫：任何可滚动页面的内容都不许比视口宽。
+        # 历史上 TTS 百炼提示标签（单行 1474px）把模型路由页撑到 2553px，
+        # 右侧控件被裁、页面"突然左移偏移、显示不全"——此检查防止复发。
+        # 注意：只切页不主动 refresh（ensure_loaded 会把未配置槽位的默认预设
+        # 写进界面，污染后面的断言；宽度检查在后续各页真实 refresh 时自然生效）
+        from PySide6.QtWidgets import QScrollArea as _QScrollArea
+
+        _overflow_pages = []
+        for _page in window.pages:
+            window.show_page(window.pages.index(_page))
+            pump(app, 0.8)
+            for _scroll in _page.findChildren(_QScrollArea):
+                _widget = _scroll.widget()
+                if _widget is not None and _widget.width() > _scroll.viewport().width() + 2:
+                    _overflow_pages.append(
+                        "%s：内容 %d > 视口 %d"
+                        % (_page.page_title, _widget.width(), _scroll.viewport().width())
+                    )
+        window.show_page_by_key("dashboard")
+        pump(app, 0.3)
+        checker.check(
+            "所有页面内容宽度都不超出视口（防止页面偏移/显示不全）",
+            not _overflow_pages,
+            "；".join(_overflow_pages),
         )
         checker.check(
             "无托盘环境下给出提示且不崩溃",
@@ -521,8 +556,8 @@ def main() -> int:
                     child.text() for child in dialog.findChildren(QLabel) if hasattr(child, "text")
                 )
                 checker.check(
-                    "关于窗口显示名称 / 版本 V0.1 / 作者 baiai.org",
-                    "BaiAi-Tavern" in body and "V0.1" in body and "baiai.org" in body,
+                    "关于窗口显示名称 / 版本 V0.2 / 作者 baiai.org",
+                    "BaiAi-Tavern" in body and "V0.2" in body and "baiai.org" in body,
                     body[:200],
                 )
                 checker.check(
@@ -551,6 +586,136 @@ def main() -> int:
                 )
                 dialog.close()
                 pump(app, 0.2)
+
+        # --------------------------------------------------- 安装与更新（左下角按钮）
+        from app import updater as up
+        from app.config_store import save_config as _save_cfg
+        from app.lifecycle import InstallUpdateDialog, UpdateNoticeDialog
+
+        # 主窗口构建 6 秒后会触发一次启动更新检查（singleShot）；
+        # 先把时间泵过这个点，避免它落在下面的断言窗口里干扰状态
+        pump(app, 7.5)
+
+        fake_release_info = {
+            "ok": True,
+            "release": {"tag_name": "v0.3", "body": "- 新增更新系统\n- 一些修复"},
+            "latest_tag": "v0.3",
+            "latest_display": "V0.3",
+            "current_display": "V0.2",
+            "newer": True,
+            "asset": {"name": "BaiAi-Tavern-V0.3.exe", "browser_download_url": "http://127.0.0.1:1/x.exe"},
+            "sums_asset": None,
+            "release_url": "http://127.0.0.1:1",
+        }
+        update_button = getattr(window, "btn_install_update", None)
+        checker.check("左下角有「安装与更新」按钮（带图标）", update_button is not None and not update_button.icon().isNull())
+        original_check_latest = up.check_latest
+        up.check_latest = lambda current_version, api_base=None, timeout=None: dict(fake_release_info)
+        try:
+            if update_button is not None:
+                checker.check(
+                    "「安装与更新」位于左下角（与「关于」同一行，在导航下方）",
+                    update_button.y() > window.nav.y() + window.nav.height() - 8,
+                    "按钮 y=%d" % update_button.y(),
+                )
+                update_button.click()
+                wait_until(app, lambda: window._install_update_dialog is not None, timeout=10)
+                dialog = window._install_update_dialog
+                checker.check("点击「安装与更新」打开一体窗口", isinstance(dialog, InstallUpdateDialog) and dialog is not None and dialog.isVisible())
+                if isinstance(dialog, InstallUpdateDialog):
+                    body = " ".join(child.text() for child in dialog.findChildren(QLabel) if hasattr(child, "text"))
+                    checker.check(
+                        "一体窗口含 更新 / 安装 / 卸载 / 关于 四个区块",
+                        "更新" in body and "安装" in body and "卸载" in body and "关于" in body,
+                        body[:160],
+                    )
+                    checker.check(
+                        "一体窗口带 检查/更新/打开Releases/卸载 控件",
+                        dialog.btn_check is not None
+                        and dialog.btn_update is not None
+                        and dialog.btn_releases is not None
+                        and dialog.edit_target_dir is not None
+                        and dialog.btn_uninstall is not None
+                        and dialog.btn_uninstall_wipe is not None,
+                        "",
+                    )
+                    checked = wait_until(app, lambda: dialog.btn_update.isEnabled(), timeout=15)
+                    checker.check(
+                        "更新检查（mock 发现新版）后「立即更新」可用",
+                        checked and dialog.btn_update.text() == "立即更新",
+                        str(dialog.lbl_update_state.text())[:160],
+                    )
+                    checker.check(
+                        "新版状态行与 Release 说明可见",
+                        "V0.3" in str(dialog.lbl_update_state.text()) and "更新系统" in str(dialog.lbl_release_note.text()),
+                        str(dialog.lbl_update_state.text())[:160],
+                    )
+                    _save_cfg(context.config, {"app": {"update_skipped_version": "v0.3"}})
+                    dialog._sync_update_controls()
+                    checker.check(
+                        "跳过某版本时显示跳过状态与「恢复提示」",
+                        dialog.lbl_skip.isVisible() and dialog.btn_unskip.isVisible() and "V0.3" in str(dialog.lbl_skip.text()),
+                        str(dialog.lbl_skip.text())[:100],
+                    )
+                    dialog.btn_unskip.click()
+                    pump(app, 0.2)
+                    checker.check(
+                        "点「恢复提示」清掉跳过版本",
+                        str(context.config.get("app.update_skipped_version", "") or "") == "",
+                        str(context.config.get("app.update_skipped_version", "")),
+                    )
+                    dialog.chk_auto.setChecked(False)
+                    pump(app, 0.2)
+                    auto_off = not bool(context.config.get("app.update_check_enabled", True))
+                    dialog.chk_auto.setChecked(True)
+                    pump(app, 0.2)
+                    checker.check(
+                        "取消「启动时自动检查更新」即保存「不再提示」",
+                        auto_off and bool(context.config.get("app.update_check_enabled", True)),
+                        "",
+                    )
+                    dialog.close()
+                    pump(app, 0.3)
+
+            # 启动检查：跳过该版本不弹 / 未跳过弹提醒 / 不再提示整体跳过
+            if window._update_notice is not None:  # 清掉启动自动检查可能留下的提醒
+                try:
+                    window._update_notice.close()
+                except Exception:
+                    pass
+                window._update_notice = None
+                pump(app, 0.2)
+            _save_cfg(context.config, {"app": {"update_skipped_version": "v0.3", "update_check_enabled": True}})
+            window._on_startup_update_check(dict(fake_release_info))
+            pump(app, 0.3)
+            checker.check("最新版本被「跳过」时启动不弹更新提醒", window._update_notice is None, "")
+
+            _save_cfg(context.config, {"app": {"update_skipped_version": ""}})
+            window._on_startup_update_check(dict(fake_release_info))
+            pump(app, 0.3)
+            notice = window._update_notice
+            checker.check("启动发现新版本时弹出更新提醒", isinstance(notice, UpdateNoticeDialog) and notice.isVisible())
+            if isinstance(notice, UpdateNoticeDialog):
+                checker.check(
+                    "提醒给四个出口：立即更新 / 跳过此版本 / 不再提示 / 稍后再说",
+                    notice.btn_update is not None
+                    and notice.btn_skip is not None
+                    and notice.btn_never is not None
+                    and notice.btn_later is not None,
+                    "",
+                )
+                notice._on_clicked(notice.btn_never)
+                pump(app, 0.2)
+                checker.check("选「不再提示」后启动自动检查被关闭", not bool(context.config.get("app.update_check_enabled", True)), "")
+
+                window._update_notice = None
+                window.maybe_check_update()
+                pump(app, 0.6)
+                checker.check("「不再提示」生效：启动自动检查整体跳过（不弹提醒）", window._update_notice is None, "")
+                _save_cfg(context.config, {"app": {"update_check_enabled": True}})
+        finally:
+            up.check_latest = original_check_latest
+            _save_cfg(context.config, {"app": {"update_check_enabled": True, "update_skipped_version": ""}})
 
         # --------------------------------------------------------- 仪表盘
         online = wait_until(app, lambda: bool(context.last_status.get("online")), timeout=30)
@@ -654,16 +819,79 @@ def main() -> int:
             str([item.name_label.text() for item in character_cards(characters_page)]),
         )
         # 新建对话框带示例模板（用户不会写人设时的兜底）
-        from app.pages.characters import CharacterEditDialog
+        from app.pages.characters import CharacterEditDialog, CharacterVoiceDialog
 
         dialog = CharacterEditDialog({}, characters_page, creating=True)
         dialog._fill_template()
         template_values = dialog.values()
-        dialog.deleteLater()
         checker.check(
             "新建角色对话框可一键填入示例",
             bool(template_values.get("name")) and bool(template_values.get("system_prompt")),
             str(template_values.get("name")),
+        )
+        # 编辑对话框表单包在滚动区里（字段多时底部不再被裁掉）
+        from PySide6.QtWidgets import QScrollArea as _QScrollArea
+
+        checker.check(
+            "角色编辑对话框带滚动条（长表单可滚动）",
+            dialog.findChild(_QScrollArea) is not None,
+        )
+        # 占位符说明：{{char}} / {{user}} 是角色卡标准写法，避免被当成“空缺”
+        from PySide6.QtWidgets import QLabel as _QLabel
+
+        hint_texts = [item.text() for item in dialog.findChildren(_QLabel)]
+        checker.check(
+            "编辑对话框说明 {{char}}/{{user}} 占位符",
+            any("{{char}}" in text and "{{user}}" in text for text in hint_texts),
+        )
+        # Chub 卡片「补充设定」是整页 HTML，要说明它不影响对话（用户实测当成乱码）
+        html_dialog = CharacterEditDialog(
+            {"name": "Chub 角色", "creator_notes": '<div style="max-width: 100%;">' + "备注内容 " * 100},
+            characters_page,
+        )
+        html_hint_texts = [item.text() for item in html_dialog.findChildren(_QLabel)]
+        checker.check(
+            "编辑对话框说明 HTML 版补充设定不影响对话",
+            any("HTML" in text and "不影响对话" in text for text in html_hint_texts),
+        )
+        # 音色设置独立对话框：音色下拉 + 试听 + 语速/音调/音量调节
+        voice_dialog = CharacterVoiceDialog(
+            {"id": "x1", "name": "音色测试", "tts_voice": "", "tts_rate": "+20%"},
+            characters_page,
+        )
+        checker.check(
+            "角色音色对话框含音色下拉 / 试听 / 音色调节",
+            voice_dialog.combo_voice is not None
+            and voice_dialog.combo_voice.count() >= 14
+            and voice_dialog.btn_preview_voice is not None
+            and voice_dialog.spin_rate is not None
+            and voice_dialog.spin_pitch is not None
+            and voice_dialog.spin_volume is not None
+            and voice_dialog.dspin_speed is not None,
+            "音色 %d 个" % voice_dialog.combo_voice.count(),
+        )
+        checker.check(
+            "音色对话框回显角色已保存的语速调节",
+            voice_dialog.spin_rate.value() == 20,
+            str(voice_dialog.spin_rate.value()),
+        )
+        voice_values = voice_dialog.values()
+        voice_dialog.deleteLater()
+        checker.check(
+            "音色对话框输出 tts_voice 与角色级调节值（0 值留空）",
+            voice_values.get("tts_rate") == "+20%"
+            and voice_values.get("tts_pitch") == ""
+            and voice_values.get("tts_speed") == "",
+            str(voice_values),
+        )
+        dialog.deleteLater()
+        # 角色卡上有「音色」按钮与可点击头像
+        cards = character_cards(characters_page)
+        checker.check(
+            "角色卡带「音色」按钮与可点击头像",
+            all(card.voice_button is not None for card in cards)
+            and all(card.avatar.cursor().shape() == Qt.CursorShape.PointingHandCursor for card in cards),
+            str([getattr(c, "character_id", "") for c in cards]),
         )
 
         total_enabled = len(client.get("/api/characters", params={"enabled_only": True}).json())
@@ -739,18 +967,290 @@ def main() -> int:
 
         window.show_page_by_key("conversations")
         conversations_page = page_by_key("conversations")
-        conversations_page.refresh()
+
+        def _row0_count() -> int:
+            table = conversations_page.conversation_table
+            try:
+                return int(table.item(0, 1).text())
+            except Exception:
+                return -1
+
+        # 宽度守卫巡检可能已在此页触发过一次旧加载（当时库里还没有消息），
+        # 且「刷新」任务按 key 去重——旧任务还在跑时新的刷新会被跳过。
+        # 因此循环刷新，直到表格第 0 行变成刚才的「在忙吗？」会话（2 条消息）
+        listed = False
+        for _attempt in range(3):
+            conversations_page.refresh()
+            listed = wait_until(app, lambda: _row0_count() >= 2, timeout=10)
+            if listed:
+                break
         checker.check(
-            "对话页列出会话",
-            wait_until(app, lambda: conversations_page.conversation_table.rowCount() >= 1, timeout=25),
-            str(conversations_page.conversation_table.rowCount()),
+            "对话页列出会话（第 0 行是刚才的会话）",
+            listed,
+            "行数=%d 第0行消息数=%d"
+            % (conversations_page.conversation_table.rowCount(), _row0_count()),
         )
+        # 先清空选择再选第 0 行：刷新重新填充表格会清掉选中，产品侧会按
+        # 当前角色跟回；测试这里显式选一次，保证消息面板加载第 0 行
+        conversations_page.conversation_table.clearSelection()
         conversations_page.conversation_table.selectRow(0)
         checker.check(
             "对话页加载消息内容",
             wait_until(app, lambda: conversations_page.message_table.rowCount() >= 2, timeout=25),
-            str(conversations_page.message_table.rowCount()),
+            "第0行=%s 当前角色=%s 消息行数=%d"
+            % (
+                str(conversations_page.conversation_table.item(0, 0).text())
+                if conversations_page.conversation_table.rowCount()
+                else "-",
+                conversations_page.current_character_name,
+                conversations_page.message_table.rowCount(),
+            ),
         )
+
+        # ------------------------------------------------------- 模型路由
+        window.show_page_by_key("models")
+        models_page = page_by_key("models")
+        models_page.refresh()
+        pump(app, 0.5)
+        checker.check(
+            "模型路由页有三个槽位表单（主模型已整合到系统设置，听语音用平台参考转写）",
+            all(hasattr(models_page, "form_%s" % s) for s in ("vision", "image", "tts"))
+            and not hasattr(models_page, "form_chat")
+            and not hasattr(models_page, "form_asr"),
+        )
+        vision_form = models_page.form_vision
+        checker.check(
+            "槽位表单带服务商预设（同 LLM 表单）",
+            vision_form.combo_preset is not None and vision_form.combo_preset.count() >= 4,
+            str(vision_form.combo_preset.count() if vision_form.combo_preset else None),
+        )
+        # 预设 → 自动填 Base URL + 候选模型
+        vision_form.combo_preset.setCurrentIndex(1)
+        vision_form.combo_preset.setCurrentIndex(0)
+        pump(app, 0.2)
+        checker.check(
+            "选预设后自动填好 Base URL 与候选模型",
+            vision_form.edit_base.text() == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            and vision_form.edit_model.currentText() == "qwen-vl-max",
+            "%s | %s" % (vision_form.edit_base.text(), vision_form.edit_model.currentText()),
+        )
+        # 获取模型列表（mock /v1/models）+ 点选
+        vision_form.edit_base.setText("%s/v1" % smoke_test.MOCK_URL)
+        vision_form.btn_fetch.click()
+        checker.check(
+            "槽位表单可获取上游模型列表",
+            wait_until(app, lambda: len(vision_form.all_models) == 5, timeout=30),
+            str(vision_form.all_models),
+        )
+        vision_form.list_models.itemClicked.emit(vision_form.list_models.item(0))
+        pump(app, 0.2)
+        checker.check(
+            "模型列表点选即填入模型输入框",
+            vision_form.edit_model.currentText() == vision_form.all_models[0],
+            vision_form.edit_model.currentText(),
+        )
+        # 测试线路按表单当前值（未保存）生效；视觉测试线路用内置红色测试图，
+        # mock 需答「红色」才通过（验证真的把图发给了模型）
+        mock.reset(vision_text="红色")
+        vision_form.edit_key.setText("mock-key")
+        vision_form.edit_model.setCurrentText("mock-model")
+        vision_form.test()
+        checker.check(
+            "测试线路按表单当前值发起（未点保存也生效）",
+            wait_until(
+                app,
+                lambda: bool(vision_form.last_result) and vision_form.last_result.get("ok") is True,
+                timeout=60,
+            ),
+            str(vision_form.last_result),
+        )
+        mock.reset(vision_text="我看你发的图了（mock 视觉回复）。")
+        checker.check(
+            "视觉测试线路校验内置红色测试图（mock 答「红色」）",
+            "红色" in str((vision_form.last_result or {}).get("message") or ""),
+            str(vision_form.last_result),
+        )
+        # 测试期间/结束后按钮保持可用（焦点不跳到下方表单，防"窗口跳段"回归）
+        checker.check(
+            "测试线路完成后按钮保持可用（焦点不串段）",
+            vision_form.btn_test.isEnabled(),
+            "",
+        )
+        # 生图：双 Gemini 预设（OpenAI 兼容层 + 原生接口），原生预设自动切换引擎
+        image_form = models_page.form_image
+        checker.check(
+            "生图槽位带引擎下拉（OpenAI 兼容 / Gemini 原生）",
+            image_form.combo_engine is not None and image_form.combo_engine.count() == 2,
+            str(image_form.combo_engine.count() if image_form.combo_engine else None),
+        )
+        compat_idx = image_form.combo_preset.findText("Google Gemini 生图（OpenAI 兼容层）")
+        image_form.combo_preset.setCurrentIndex(1)
+        image_form.combo_preset.setCurrentIndex(compat_idx)
+        pump(app, 0.2)
+        checker.check(
+            "Gemini 兼容层预设填 Base URL 与文档点名模型",
+            image_form.edit_base.text().endswith("/v1beta/openai")
+            and image_form.edit_model.currentText() == "gemini-2.5-flash-image",
+            "%s | %s" % (image_form.edit_base.text(), image_form.edit_model.currentText()),
+        )
+        native_idx = image_form.combo_preset.findText("Google Gemini 生图（原生接口，支持全部新模型）")
+        image_form.combo_preset.setCurrentIndex(compat_idx)
+        image_form.combo_preset.setCurrentIndex(native_idx)
+        pump(app, 0.2)
+        checker.check(
+            "Gemini 原生预设自动切引擎 + 填 v1beta 地址 + nano banana 2 lite 模型",
+            image_form.current_engine() == "gemini-native"
+            and image_form.edit_base.text() == "https://generativelanguage.googleapis.com/v1beta"
+            and image_form.edit_model.currentText() == "gemini-3.1-flash-lite-image",
+            "%s | %s | %s"
+            % (
+                image_form.current_engine(),
+                image_form.edit_base.text(),
+                image_form.edit_model.currentText(),
+            ),
+        )
+        # TTS：推荐引擎 dashscope 为默认，未配置时自动填好推荐组合（用户只需粘贴 Key）
+        from common.providers import ENGINE_DASHSCOPE, SLOT_ENGINES, SLOT_TTS
+
+        tts_form = models_page.form_tts
+        _tts_engines = SLOT_ENGINES[SLOT_TTS]
+        _i_ds = _tts_engines.index(ENGINE_DASHSCOPE)
+        _i_edge = _tts_engines.index("edge-tts")
+        checker.check(
+            "TTS 默认推荐引擎 dashscope，自动填好推荐组合（模型/音色/地址）",
+            tts_form.combo_engine is not None
+            and tts_form.combo_engine.count() == 3
+            and tts_form.current_engine() == ENGINE_DASHSCOPE
+            and tts_form.edit_model.currentText() == "qwen-audio-3.1-tts-flash"
+            and tts_form.combo_voice.currentText() == "yuxiaoyun_v3.1"
+            and tts_form.edit_base.text() == "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "engine=%s model=%s voice=%s base=%s"
+            % (
+                tts_form.current_engine(),
+                tts_form.edit_model.currentText(),
+                tts_form.combo_voice.currentText(),
+                tts_form.edit_base.text(),
+            ),
+        )
+        checker.check(
+            "TTS 引擎下拉含推荐标注",
+            "推荐" in tts_form.combo_engine.itemText(_i_ds),
+            tts_form.combo_engine.itemText(_i_ds),
+        )
+        # TTS 引擎：三选项（百炼 DashScope 推荐默认 / edge-tts / OpenAI 兼容）
+        if tts_form.combo_engine is not None and tts_form.combo_engine.count() == 3:
+            # 等初始（百炼候选）音色刷新落定，避免任务 key 占用导致新一轮被跳过
+            wait_until(
+                app,
+                lambda: not context.runner.is_busy("media_voices_%s" % tts_form._key_tag),
+                timeout=30,
+            )
+            tts_form.combo_engine.blockSignals(True)
+            tts_form.combo_engine.setCurrentIndex(_i_ds)  # 百炼 DashScope（已是默认，强制再刷一次）
+            tts_form.combo_engine.blockSignals(False)
+            tts_form._on_engine_changed(_i_ds)
+            got_dashscope_voices = wait_until(
+                app,
+                lambda: 5 < tts_form.combo_voice.count() < 200
+                and "Cherry" in [tts_form.combo_voice.itemText(i) for i in range(tts_form.combo_voice.count())],
+                timeout=30,
+            )
+            checker.check(
+                "百炼引擎下音色清单为 Qwen-TTS / CosyVoice / Qwen-Audio 候选",
+                got_dashscope_voices and tts_form.current_engine() == ENGINE_DASHSCOPE
+                and tts_form.lbl_tune_dashscope is not None and tts_form.lbl_tune_dashscope.isVisible(),
+                "音色数 %d" % tts_form.combo_voice.count(),
+            )
+            tts_form.combo_engine.blockSignals(True)
+            tts_form.combo_engine.setCurrentIndex(_i_edge)  # 切到 edge-tts
+            tts_form.combo_engine.blockSignals(False)
+            tts_form._on_engine_changed(_i_edge)
+            # 音色刷新任务按键去重：若切引擎时上一轮刷新还在跑，本轮会被跳过 → 等空闲后补一次
+            wait_until(
+                app,
+                lambda: not context.runner.is_busy("media_voices_%s" % tts_form._key_tag),
+                timeout=30,
+            )
+            if tts_form.combo_voice.count() <= 100:
+                tts_form._refresh_voice_list()
+            wait_until(app, lambda: tts_form.combo_voice.count() > 100, timeout=45)
+            # 获取模型列表成功后，tts 槽位要联动刷新音色清单（edge-tts 时按钮置灰，先切到百炼）
+            _orig_refresh = tts_form._refresh_voice_list
+            _refresh_calls = {"n": 0}
+
+            def _spy_refresh():
+                _refresh_calls["n"] += 1
+                _orig_refresh()
+
+            tts_form._refresh_voice_list = _spy_refresh
+            tts_form.combo_engine.blockSignals(True)
+            tts_form.combo_engine.setCurrentIndex(_i_ds)
+            tts_form.combo_engine.blockSignals(False)
+            tts_form._on_engine_changed(_i_ds)
+            # 等引擎切换引发的首次音色刷新落定，再清零计数
+            wait_until(
+                app,
+                lambda: _refresh_calls["n"] >= 1
+                and not context.runner.is_busy("media_voices_%s" % tts_form._key_tag),
+                timeout=30,
+            )
+            pump(app, 1.0)
+            _refresh_calls["n"] = 0
+            tts_form.edit_base.setText("%s/v1" % smoke_test.MOCK_URL)
+            tts_form.edit_key.setText("mock-key")
+            tts_form.btn_fetch.click()
+            _fetch_refreshed = wait_until(
+                app,
+                lambda: _refresh_calls["n"] >= 1 and len(tts_form.all_models) == 5,
+                timeout=30,
+            )
+            tts_form._refresh_voice_list = _orig_refresh
+            checker.check(
+                "获取模型列表成功后联动刷新音色清单",
+                _fetch_refreshed,
+                "刷新调用 %d 次，模型 %d 个" % (_refresh_calls["n"], len(tts_form.all_models)),
+            )
+            tts_form.combo_engine.blockSignals(True)
+            tts_form.combo_engine.setCurrentIndex(_i_edge)  # 收尾：切回 edge-tts
+            tts_form.combo_engine.blockSignals(False)
+            tts_form._on_engine_changed(_i_edge)
+            # 音色刷新任务按键去重：若切引擎时上一轮刷新还在跑，本轮会被跳过 → 等空闲后补一次
+            wait_until(
+                app,
+                lambda: not context.runner.is_busy("media_voices_%s" % tts_form._key_tag),
+                timeout=30,
+            )
+            if tts_form.combo_voice.count() <= 100:
+                tts_form._refresh_voice_list()
+            wait_until(app, lambda: tts_form.combo_voice.count() > 100, timeout=45)
+            checker.check(
+                "TTS 表单带音色调节字段（语速/音调/音量/语速倍率）",
+                tts_form.spin_rate is not None
+                and tts_form.spin_pitch is not None
+                and tts_form.spin_volume is not None
+                and tts_form.dspin_speed is not None,
+            )
+            tts_form.spin_rate.setValue(20)
+            tts_form.spin_pitch.setValue(-5)
+            pump(app, 0.2)
+            tts_values = tts_form.values()
+            checker.check(
+                "音色调节值按 edge-tts 格式输出（+N% / +NHz），0 值不输出",
+                tts_values.get("rate") == "+20%"
+                and tts_values.get("pitch") == "-5Hz"
+                and "volume" not in tts_values
+                and "speed" not in tts_values,
+                str(tts_values),
+            )
+            tts_form.spin_rate.setValue(0)
+            tts_form.spin_pitch.setValue(0)
+            pump(app, 0.2)
+            # 音色下拉：edge-tts 全量清单（300+，中文在前）
+            checker.check(
+                "音色下拉加载了 edge-tts 全量音色清单",
+                wait_until(app, lambda: tts_form.combo_voice.count() > 100, timeout=45),
+                "当前 %d 个" % tts_form.combo_voice.count(),
+            )
 
         # ------------------------------------------------------- 系统设置
         window.show_page_by_key("settings")
@@ -1161,7 +1661,7 @@ def main() -> int:
         checker.check("托盘图标可设置状态", window.tray.set_running(True) is None)
 
         # ------------------------------------------- 每个页面的文字是否被裁切
-        for key in ("dashboard", "bots", "characters", "proactive", "conversations", "settings", "logs"):
+        for key in ("dashboard", "bots", "characters", "models", "proactive", "conversations", "settings", "logs"):
             window.show_page_by_key(key)
             pump(app, 0.35)
             page = page_by_key(key)
@@ -1217,17 +1717,9 @@ def main() -> int:
         checker.check("GUI 自检未抛出异常", False, str(exc))
         return 1
     finally:
-        try:
-            if context is not None:
-                context.shutdown()
-        except Exception:
-            pass
-        try:
-            if window is not None:
-                window.tray.hide()
-        except Exception:
-            pass
-        app.processEvents()
+        # mock / bot 清理放在 Qt 析构（context.shutdown / processEvents）之前：
+        # Qt 清理阶段偶发 abort（0xC0000409）时，后面的语句不会执行，
+        # mock 子进程会留成孤儿（Windows 下 MockProcess 的 Job Object 是第二道保险）
         try:
             client.post("/api/shutdown", timeout=10)
         except Exception:
@@ -1238,8 +1730,28 @@ def main() -> int:
         if bot.poll() is None:
             bot.terminate()
             time.sleep(1)
-        client.close()
-        mock.stop()
+        try:
+            client.close()
+        except Exception:
+            pass
+        try:
+            mock.stop()
+        except Exception:
+            pass
+        try:
+            if context is not None:
+                context.shutdown()
+        except Exception:
+            pass
+        try:
+            if window is not None:
+                window.tray.hide()
+        except Exception:
+            pass
+        try:
+            app.processEvents()
+        except Exception:
+            pass
 
 
 def yaml_load(path) -> Dict[str, Any]:

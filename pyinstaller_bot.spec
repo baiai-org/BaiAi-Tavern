@@ -16,6 +16,8 @@ ROOT = os.path.abspath(os.getcwd())
 _version_path = os.path.join(ROOT, "build", "version_info_bot.txt")
 version = _version_path if os.path.exists(_version_path) else None
 
+
+
 datas = [
     (os.path.join(ROOT, "config.example.yaml"), "."),
     # 内置默认角色卡：角色池为空时自动导入
@@ -39,7 +41,6 @@ a = Analysis(
     # 入口脚本负责 import bot 包，这样包内的相对导入在打包后依然可用
     [os.path.join(ROOT, "scripts", "bot_entry.py")],
     pathex=[ROOT],
-    binaries=[],
     datas=datas,
     hiddenimports=[
         # 通过字符串动态加载的模块，必须显式声明
@@ -58,6 +59,12 @@ a = Analysis(
         "bot.ai_engine.engine",
         "bot.ai_engine.llm_client",
         "bot.ai_engine.prompt_builder",
+        # 富媒体（V0.2）：hub / 生图 / 语音
+        "bot.media",
+        "bot.media.hub",
+        "bot.media.store",
+        "bot.media.voice",
+        "bot.media.images",
         # 第三方
         "aiosqlite",
         "apscheduler",

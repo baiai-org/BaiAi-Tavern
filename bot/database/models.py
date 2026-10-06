@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 SCHEMA_STATEMENTS: List[str] = [
     # ------------------------------------------------------------ 元信息
@@ -34,6 +34,11 @@ SCHEMA_STATEMENTS: List[str] = [
         avatar_path   TEXT DEFAULT '',
         source_path   TEXT DEFAULT '',
         card_spec     TEXT DEFAULT '',
+        tts_voice     TEXT DEFAULT '',
+        tts_rate      TEXT DEFAULT '',
+        tts_pitch     TEXT DEFAULT '',
+        tts_volume    TEXT DEFAULT '',
+        tts_speed     TEXT DEFAULT '',
         greeting_used INTEGER DEFAULT 0,
         enabled       INTEGER DEFAULT 1,
         sort_order    INTEGER DEFAULT 0,
@@ -49,6 +54,8 @@ SCHEMA_STATEMENTS: List[str] = [
         character_id  TEXT NOT NULL,
         role          TEXT NOT NULL,
         content       TEXT NOT NULL,
+        kind          TEXT DEFAULT 'text',
+        media_path    TEXT DEFAULT '',
         is_proactive  INTEGER DEFAULT 0,
         created_at    TEXT DEFAULT ''
     )
@@ -103,6 +110,14 @@ SCHEMA_STATEMENTS: List[str] = [
 MIGRATION_COLUMNS: List[tuple] = [
     ("proactive_log", "bot_id", "TEXT DEFAULT ''"),
     ("proactive_log", "bot_name", "TEXT DEFAULT ''"),
+    ("characters", "tts_voice", "TEXT DEFAULT ''"),
+    ("messages", "kind", "TEXT DEFAULT 'text'"),
+    ("messages", "media_path", "TEXT DEFAULT ''"),
+    # V0.2：角色级音色调节（格式与 providers.tts 的音色调节一致：+10% / +5Hz / 1.2）
+    ("characters", "tts_rate", "TEXT DEFAULT ''"),
+    ("characters", "tts_pitch", "TEXT DEFAULT ''"),
+    ("characters", "tts_volume", "TEXT DEFAULT ''"),
+    ("characters", "tts_speed", "TEXT DEFAULT ''"),
 ]
 
 

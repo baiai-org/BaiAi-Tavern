@@ -46,6 +46,20 @@ _runtime: Optional[Runtime] = None
 _shutdown_handler: Optional[Any] = None
 
 
+def _b64_preview(data: bytes, limit_kb: int = 2048) -> str:
+    """TTS 试听用的 base64（GUI 与 Bot 同机走 127.0.0.1，直接给完整音频；
+    2MB 上限只是防极端长文本把接口载荷撑爆）。"""
+    import base64
+
+    return base64.b64encode(data[: limit_kb * 1024]).decode("ascii")
+
+
+def iso_now_from_stat(mtime: float) -> str:
+    import datetime
+
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def set_runtime(runtime: Runtime) -> None:
     global _runtime
     _runtime = runtime
@@ -374,6 +388,250 @@ async def llm_test() -> Dict[str, Any]:
     return await runtime.engine.test_llm()  # type: ignore[union-attr]
 
 
+# ========================================================= 模型路由（V0.2） ====
+class _SlotOverrideConfig:
+    """测试线路用：把用户在表单里填的值（尚未保存）叠到已保存配置上。
+
+    只影响 ``providers.<slot>`` 这一个节点，其余键透传已保存配置；
+    表单里的空字符串字段按「没填」处理，保证测试结果与界面所见一致。
+    """
+
+    def __init__(self, base, slot: str, override: Dict[str, Any]) -> None:
+        self._base = base
+        self._slot = slot
+        self._override = override
+
+    def get(self, key, default=None):
+        if key == "providers.%s" % self._slot:
+            node = self._base.get(key)
+            node = dict(node) if isinstance(node, dict) else {}
+            for field, value in self._override.items():
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    node.pop(field, None)
+                else:
+                    node[field] = value
+            return node
+        return self._base.get(key, default)
+
+
+@router.get("/providers")
+async def providers_status() -> Dict[str, Any]:
+    """各模型槽位（chat/vision/image/asr/tts）的配置与就绪状态。"""
+    runtime = get_runtime()
+    runtime.config.reload_if_changed()
+    return runtime.media.status()
+
+
+@router.post("/providers/test")
+async def providers_test(payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+    """按当前配置测试某个槽位是否真正可用（GUI「模型路由」页的测试按钮）。"""
+    from common.providers import (
+        ALL_SLOTS,
+        SLOT_IMAGE,
+        SLOT_LABELS,
+        SLOT_TTS,
+        SLOT_VISION,
+        load_slot,
+    )
+
+    runtime = get_runtime()
+    runtime.config.reload_if_changed()
+    slot = str(payload.get("slot") or "").strip()
+    voice_override = str(payload.get("voice") or "").strip()  # tts 槽位试听指定音色
+    if slot not in ALL_SLOTS:
+        raise HTTPException(status_code=400, detail="未知的模型槽位：%s" % slot)
+    # 表单当前值优先（未点「保存」也能按界面所见测试）：表单值叠在已保存配置上
+    override = payload.get("values")
+    if not isinstance(override, dict):
+        override = {}
+    cfg = _SlotOverrideConfig(runtime.config, slot, override) if override else runtime.config
+    spec = load_slot(cfg, slot)
+    if not spec.configured:
+        label = SLOT_LABELS.get(slot, slot)
+        missing = spec.missing_fields() or ["Base URL / 模型"]
+        message = "%s还没填完整（缺：%s）" % (label, "、".join(missing))
+        if "API Key" in missing:
+            message += "（本地 / 局域网地址可留空）"
+        if slot == SLOT_VISION:
+            message += "。看图线路独立于图像生成，两条线路互不影响"
+        return {"ok": False, "slot": slot, "message": message}
+    from .ai_engine.llm_client import LLMClient
+    from .media.images import ImageError, ImageGenerator, Vision, builtin_test_image_data_url
+    from .media.voice import TTS, VoiceError
+
+    try:
+        if slot == "chat":
+            client = LLMClient(
+                base_url=spec.base_url,
+                api_key=spec.api_key,
+                model=spec.model,
+                timeout=30,
+                max_retries=0,
+            )
+            result = await client.test_connection()
+            return {
+                "ok": bool(result.get("ok")),
+                "slot": slot,
+                "message": result.get("reply") or result.get("error") or "",
+                "detail": result,
+            }
+        if slot == SLOT_VISION:
+            vision = Vision(spec, timeout=60)
+            # 内置红色测试图（独立于图像生成）：能答出「红色」才算真正看了图
+            answer = await vision.describe(
+                builtin_test_image_data_url(),
+                question="这张图片的主色是什么？只回答颜色。",
+            )
+            if answer:
+                if any(word in answer.lower() for word in ("红", "red")):
+                    return {"ok": True, "slot": slot, "message": "看图正常（内置红色测试图识别为红色）：%s" % truncate(answer, 40)}
+                return {
+                    "ok": False,
+                    "slot": slot,
+                    "message": "端点通了，但没认出内置红色测试图（回答：%s）——请确认所选模型支持看图" % truncate(answer, 60),
+                }
+            return {"ok": False, "slot": slot, "message": "端点通了，但没有返回内容"}
+        if slot == SLOT_IMAGE:
+            generator = ImageGenerator(spec, timeout=120)
+            data, ext = await generator.generate("一只可爱的小猫，白色背景", size="512x512")
+            return {
+                "ok": True,
+                "slot": slot,
+                "message": "生成成功（%s，%d KB）" % (ext, len(data) // 1024),
+            }
+        if slot == SLOT_TTS:
+            from .media.instruct import (
+                generate_qwen_audio_tags,
+                generate_tts_instruction,
+                is_qwen_audio_tts_model,
+                is_tts_instruct_model,
+                local_qwen_audio_tags,
+            )
+            from .media.voice import random_preview_text
+
+            tts = TTS(spec, timeout=60)
+            # 试听文案：客户端可指定，否则从文案池随机取一句（多听几句才判断得准）
+            text = str(payload.get("text") or "").strip() or random_preview_text()
+            style: Dict[str, Any] = {}
+            for key in ("rate", "volume", "pitch"):
+                value = str(spec.extra.get(key) or "").strip()
+                if value:
+                    style[key] = value
+            speed = str(spec.extra.get("speed") or "").strip()
+            if speed:
+                try:
+                    style["speed"] = float(speed)
+                except ValueError:
+                    pass
+            # 百炼两套官方调教机制：instruct 系列走指令，qwen-audio 系列走
+            # 情感/拟声标签（text）+ 整体语气指令（instruction），主模型失败时用本地兜底
+            speech_text = text
+            instruction = ""
+            if is_tts_instruct_model(spec.model):
+                instruction = await generate_tts_instruction(runtime.engine.llm, text)
+            elif is_qwen_audio_tts_model(spec.model):
+                tag_result = await generate_qwen_audio_tags(runtime.engine.llm, text)
+                if tag_result.get("text"):
+                    speech_text = tag_result["text"]
+                    instruction = tag_result.get("instruction") or ""
+                else:
+                    speech_text, instruction = local_qwen_audio_tags(text)
+            result = await tts.synthesize(speech_text, voice=voice_override, instruction=instruction, **style)
+            message = "合成成功（%s，%d KB）· 试听文案：%s" % (
+                result["format"],
+                len(result["data"]) // 1024,
+                text,
+            )
+            if instruction and speech_text == text:
+                message += " · 指令风格生效：%s" % truncate(instruction, 40)
+            if speech_text != text:
+                message += " · 情感标签生效：%s" % truncate(speech_text, 40)
+                if instruction:
+                    message += " · 语气指令：%s" % truncate(instruction, 30)
+            return {
+                "ok": True,
+                "slot": slot,
+                "message": message,
+                "preview_b64": _b64_preview(result["data"]),
+                "preview_text": speech_text,
+            }
+    except ImageError as exc:
+        return {"ok": False, "slot": slot, "message": str(exc)}
+    except VoiceError as exc:
+        return {"ok": False, "slot": slot, "message": str(exc)}
+    except Exception as exc:  # pragma: no cover
+        log.exception("模型槽位测试失败（%s）", slot)
+        return {"ok": False, "slot": slot, "message": "测试失败：%s" % exc}
+    return {"ok": False, "slot": slot, "message": "未知的测试类型"}
+
+
+@router.get("/media/voices")
+async def media_voices(engine: str = Query("", description="可选：按引擎取音色清单（edge-tts / dashscope / openai）")) -> Dict[str, Any]:
+    """可用音色清单：edge-tts 全量（中文在前）/ 百炼候选清单，供角色音色选择。"""
+    from common.providers import ENGINE_DASHSCOPE, ENGINE_EDGE_TTS, ProviderSpec, SLOT_TTS, load_slot
+
+    from .media.voice import TTS
+
+    runtime = get_runtime()
+    spec = load_slot(runtime.config, SLOT_TTS)
+    engine = (engine or "").strip()
+    if engine and engine in (ENGINE_EDGE_TTS, ENGINE_DASHSCOPE):
+        spec = ProviderSpec(slot=SLOT_TTS, engine=engine, base_url=spec.base_url, api_key=spec.api_key, model=spec.model, voice=spec.voice)
+    if spec.engine not in (ENGINE_EDGE_TTS, ENGINE_DASHSCOPE):
+        return {"ok": True, "voices": []}
+    voices = await TTS(spec).list_voices()
+    return {"ok": True, "voices": voices}
+
+
+@router.get("/media/file")
+async def media_file(name: str = Query(..., description="媒体文件名（data/media 下）")):
+    """给 GUI 的会话页 / 角色音色试听读取媒体文件。"""
+    from .media import store
+
+    get_runtime()  # 保证数据目录已就绪
+    safe_name = Path(name).name
+    for sub in (store.INBOX, store.OUTBOX):
+        path = store.media_root() / sub / safe_name
+        if path.is_file():
+            media_type = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+                ".mp3": "audio/mpeg",
+                ".wav": "audio/wav",
+                ".ogg": "audio/ogg",
+            }.get(path.suffix.lower(), "application/octet-stream")
+            return FileResponse(str(path), media_type=media_type)
+    raise HTTPException(status_code=404, detail="媒体文件不存在")
+
+
+@router.get("/media/inbox")
+async def media_inbox(limit: int = Query(20, ge=1, le=200)) -> List[Dict[str, Any]]:
+    """最近收到的图片 / 语音（会话页展示用）。"""
+    from .media import store
+
+    get_runtime()
+    items = []
+    for path in store.list_recent(store.INBOX, limit):
+        try:
+            stat = path.stat()
+            items.append(
+                {
+                    "name": path.name,
+                    "size": int(stat.st_size),
+                    "mtime": iso_now_from_stat(stat.st_mtime),
+                }
+            )
+        except Exception:
+            continue
+    return items
+
+
 # ============================================================ 角色管理 ======
 @router.get("/characters")
 async def list_characters(enabled_only: bool = Query(False)) -> List[Dict[str, Any]]:
@@ -427,6 +685,7 @@ async def import_character(file: UploadFile = File(...), overwrite: bool = Query
         "status": outcome["status"],
         "character": outcome["character"],
         "summary": outcome["card"].summary(),
+        "missing_core_fields": outcome["card"].missing_core_fields(),
     }
 
 
@@ -478,6 +737,7 @@ async def import_character_from_path(
         "status": result["status"],
         "character": result["character"],
         "summary": result["card"].summary(),
+        "missing_core_fields": result["card"].missing_core_fields(),
     }
 
 
@@ -504,6 +764,11 @@ async def update_character(character_id: str, payload: Dict[str, Any] = Body(...
         "system_prompt",
         "creator_notes",
         "tags",
+        "tts_voice",
+        "tts_rate",
+        "tts_pitch",
+        "tts_volume",
+        "tts_speed",
         "sort_order",
     }
     fields = {key: value for key, value in (payload or {}).items() if key in allowed_keys}
@@ -547,6 +812,26 @@ async def character_avatar(character_id: str) -> Any:
     if not path:
         raise HTTPException(status_code=404, detail="该角色没有头像")
     return FileResponse(str(path))
+
+
+@router.put("/characters/{character_id}/avatar")
+async def set_character_avatar(character_id: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """替换角色头像（用户在界面上自选图片）。"""
+    from .character_manager import CharacterCardError
+
+    runtime = get_runtime()
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="头像文件为空")
+    suffix = Path(file.filename or "avatar.png").suffix or ".png"
+    try:
+        row = await runtime.registry.update_avatar(character_id, data, suffix)  # type: ignore[union-attr]
+    except CharacterCardError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not row:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    runtime.publish({"type": "characters_changed"})
+    return {"ok": True, "character": row}
 
 
 # ============================================================ 对话 / 记忆 ===

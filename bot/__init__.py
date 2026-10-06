@@ -8,6 +8,6 @@
 * 对外暴露本地 HTTP API（``/api/*``）与 WebSocket（``/ws/events``）供 GUI 使用。
 """
 
-__version__ = "0.1"
+__version__ = "0.2"
 
 __all__ = ["__version__"]

@@ -50,6 +50,7 @@ class CharacterCard:
     creator_notes: str = ""
     tags: List[str] = field(default_factory=list)
     alternate_greetings: List[str] = field(default_factory=list)
+    tts_voice: str = ""
     spec: str = ""
     source_path: str = ""
     avatar_bytes: Optional[bytes] = None
@@ -68,6 +69,7 @@ class CharacterCard:
             "system_prompt": self.system_prompt,
             "creator_notes": self.creator_notes,
             "tags": list(self.tags),
+            "tts_voice": self.tts_voice,
             "card_spec": self.spec,
             "source_path": self.source_path,
         }
@@ -90,6 +92,28 @@ class CharacterCard:
         ]
         return ", ".join(parts)
 
+    #: 核心人设字段（卡片本身没写时，界面上对应输入框就是空的）
+    CORE_FIELD_LABELS = (
+        ("description", "描述"),
+        ("personality", "性格"),
+        ("scenario", "场景"),
+        ("mes_example", "示例对话"),
+        ("system_prompt", "系统指令"),
+    )
+
+    def missing_core_fields(self) -> List[str]:
+        """卡片本身留空的核心字段中文名。
+
+        Chub 等平台导出的卡片常常只写「描述 + 开场白 + 作者备注」，
+        其余字段为空——这是卡片内容问题而非解析丢失，导入后提示用户，
+        避免误以为程序把字段弄丢了。
+        """
+        missing = []
+        for key, label in self.CORE_FIELD_LABELS:
+            if not str(getattr(self, key) or "").strip():
+                missing.append(label)
+        return missing
+
 
 # ============================================================== PNG 解析 =====
 def _safe_name(value: str, fallback: str = "character") -> str:
@@ -99,34 +123,67 @@ def _safe_name(value: str, fallback: str = "character") -> str:
 
 
 def decode_card_payload(text: str) -> Dict[str, Any]:
-    """把 base64 文本解码为角色卡字典。"""
+    """把 tEXt 里的角色卡文本解码为字典。
+
+    兼容：标准 base64 / URL-safe base64（``-`` ``_`` 替代 ``+`` ``/``，
+    部分工具写成 urlsafe 后标准解码会静默错位）/ 个别工具直接写明文 JSON。
+    """
     compact = re.sub(r"\s+", "", text or "")
-    padding = (-len(compact)) % 4
+    if not compact:
+        raise CharacterCardError("角色卡内容为空")
+    candidates: List[bytes] = []
+    padding = "=" * ((-len(compact)) % 4)
+    for decoder in (
+        lambda s: base64.b64decode(s + padding, validate=True),
+        lambda s: base64.urlsafe_b64decode(s + padding, ),
+        lambda s: base64.b64decode(s + padding),
+    ):
+        try:
+            candidates.append(decoder(compact))
+        except (binascii.Error, ValueError):
+            continue
+    for raw in candidates:
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    # 兜底：个别工具把明文 JSON 直接写进 tEXt。先试原文（保留字符串内空白），
+    # 再去空白兜底（紧凑 JSON 也合法）。
+    for source in ((text or "").strip(), compact):
+        if not source:
+            continue
+        try:
+            data = json.loads(source)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    raise CharacterCardError("角色卡内容无法解码（base64 与 JSON 均失败）")
+
+
+def _decode_text_payload(raw: bytes) -> str:
+    """tEXt / zTXt 规范上是 latin-1，但不少工具把 UTF-8 字节直接写进去；
+    先按 UTF-8 试，失败再退回 latin-1，两种写法都能读。"""
     try:
-        raw = base64.b64decode(compact + "=" * padding)
-    except (binascii.Error, ValueError) as exc:
-        raise CharacterCardError("角色卡 base64 解码失败: %s" % exc) from exc
-    try:
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-    except json.JSONDecodeError as exc:
-        raise CharacterCardError("角色卡 JSON 解析失败: %s" % exc) from exc
-    if not isinstance(data, dict):
-        raise CharacterCardError("角色卡内容必须是 JSON 对象")
-    return data
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", "replace")
 
 
 def _parse_png_text_chunk(chunk_type: bytes, payload: bytes) -> Optional[Tuple[str, str]]:
     try:
         if chunk_type == b"tEXt":
             keyword, _, text = payload.partition(b"\x00")
-            return keyword.decode("latin-1", "replace"), text.decode("latin-1", "replace")
+            return keyword.decode("latin-1", "replace"), _decode_text_payload(text)
         if chunk_type == b"zTXt":
             keyword, _, rest = payload.partition(b"\x00")
             if len(rest) < 1 or rest[0] != 0:
                 return None
             return (
                 keyword.decode("latin-1", "replace"),
-                zlib.decompress(rest[1:]).decode("latin-1", "replace"),
+                _decode_text_payload(zlib.decompress(rest[1:])),
             )
         if chunk_type == b"iTXt":
             keyword, _, rest = payload.partition(b"\x00")
@@ -278,6 +335,7 @@ def normalize_card(
         ),
         creator_notes=_first_text(payload, "creator_notes", "creatorcomment", "creator_notes_memo"),
         tags=_normalize_tags(payload.get("tags")),
+        tts_voice=_first_text(payload, "tts_voice"),
         spec=spec,
         source_path=source_path,
         raw=data,
@@ -294,30 +352,108 @@ def normalize_card(
     return card
 
 
+_MAX_AVATAR_BYTES = 8 * 1024 * 1024
+
+
+def _image_magic_suffix(data: bytes) -> Optional[str]:
+    """按文件头识别图片格式，返回扩展名；不是图片返回 None。"""
+    if not data:
+        return None
+    if data.startswith(PNG_SIGNATURE):
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:4] == b"GIF8":
+        return ".gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:2] == b"BM":
+        return ".bmp"
+    return None
+
+
+def _download_image(url: str) -> Optional[bytes]:
+    """下载角色卡里内嵌的远程头像 URL（Chub 等平台的卡片常用）。"""
+    import urllib.request
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BaiAi-Tavern/0.2"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = response.read(_MAX_AVATAR_BYTES + 1)
+    except Exception:
+        return None
+    if len(data) > _MAX_AVATAR_BYTES:
+        return None
+    return data if _image_magic_suffix(data) else None
+
+
+def _b64_to_image(text: str) -> Optional[Tuple[bytes, str]]:
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) < 16 or not re.fullmatch(r"[A-Za-z0-9+/=_-]+", compact):
+        return None
+    for decoder in (
+        lambda s: base64.b64decode(s + "=" * ((-len(s)) % 4), validate=True),
+        lambda s: base64.urlsafe_b64decode(s + "=" * ((-len(s)) % 4)),
+        lambda s: base64.b64decode(s + "=" * ((-len(s)) % 4)),
+    ):
+        try:
+            raw = decoder(compact)
+        except (binascii.Error, ValueError):
+            continue
+        suffix = _image_magic_suffix(raw)
+        if suffix:
+            return raw, suffix
+    return None
+
+
 def _extract_avatar(payload: Dict[str, Any], data: Dict[str, Any]) -> Tuple[Optional[bytes], str]:
-    """JSON/YAML 卡片里可能内嵌头像（base64 data URL 或字段）。"""
-    candidates = []
+    """卡片里的头像：远程 URL（Chub 等）/ data URL / base64 / V3 assets。
+
+    只有能通过图片魔数验证的字节才会被采用——早期版本会把 URL 字符串
+    直接当 base64 解码，得到几十字节垃圾当成 PNG 保存（用户实测坏头像）。
+    """
+    candidates: List[str] = []
     inner = data.get("data")
     for source in (payload, data, inner if isinstance(inner, dict) else {}):
         if isinstance(source, dict):
             for key in ("avatar", "avatar_base64", "image"):
                 value = source.get(key)
                 if isinstance(value, str) and value.strip():
-                    candidates.append(value)
+                    candidates.append(value.strip())
+    # V3：assets 数组里的 icon / avatar（data URL 或 https URL）
+    for source in (payload, inner if isinstance(inner, dict) else {}):
+        assets = (source or {}).get("assets") if isinstance(source, dict) else None
+        if isinstance(assets, list):
+            for item in assets:
+                if isinstance(item, dict) and str(item.get("type") or "") in ("icon", "avatar"):
+                    uri = item.get("uri")
+                    if isinstance(uri, str) and uri.strip():
+                        candidates.append(uri.strip())
+
+    seen = set()
     for candidate in candidates:
-        text = candidate.strip()
-        suffix = ".png"
-        if text.startswith("data:image/"):
-            header, _, payload_text = text.partition(",")
-            suffix = "." + (header.split(";")[0].split("/")[-1] or "png")
-            text = payload_text
-        try:
-            compact = re.sub(r"\s+", "", text)
-            raw = base64.b64decode(compact + "=" * ((-len(compact)) % 4))
-            if raw:
-                return raw, suffix
-        except Exception:
+        if candidate in seen:
             continue
+        seen.add(candidate)
+        if candidate.startswith(("http://", "https://")):
+            raw = _download_image(candidate)
+            if raw:
+                return raw, _image_magic_suffix(raw) or ".png"
+            continue
+        if candidate.startswith("data:"):
+            header, _, payload_text = candidate.partition(",")
+            if "base64" not in header:
+                continue
+            decoded = _b64_to_image(payload_text)
+            if decoded:
+                return decoded
+            continue
+        decoded = _b64_to_image(candidate)
+        if decoded:
+            return decoded
     return None, ".png"
 
 

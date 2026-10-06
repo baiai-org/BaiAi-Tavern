@@ -140,7 +140,7 @@ class QQConfigForm(QWidget):
         target_layout.setSpacing(6)
         self.in_target_openid = QLineEdit(target_row)
         self.in_target_openid.setPlaceholderText("留空 = 自动使用最近给机器人发消息的用户")
-        self.in_target_openid.setFixedWidth(320)
+        self.in_target_openid.setFixedWidth(230)
         self.btn_forget_openid = ghost_button("忘记已记住的", target_row)
         self.btn_forget_openid.clicked.connect(self.forget_openid)
         target_layout.addWidget(self.in_target_openid)

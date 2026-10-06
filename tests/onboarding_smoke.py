@@ -719,6 +719,11 @@ def main() -> int:
             str(wizard.summary_layout.count()),
         )
         checker.check("汇总页按钮变为「完成」", wizard.btn_next.text() == "完成", wizard.btn_next.text())
+        checker.check(
+            "汇总页不再显示「取消引导」（到这一步只完成或返回，Esc/关窗仍等价跳过）",
+            not wizard.btn_cancel.isVisible(),
+            "btn_cancel visible=%s" % wizard.btn_cancel.isVisible(),
+        )
         shown = summary_text(wizard)
         checker.check(
             "汇总页显示填写的 AppID",
@@ -853,7 +858,6 @@ def main() -> int:
             second.btn_cancel.click()
             checker.check("取消引导后关闭", window.onboarding is None)
             checker.check("取消被标记为跳过", second.skipped is True)
-
         after_cancel = load_config(config_path)
         checker.check(
             "取消引导不会清掉已有配置",
@@ -861,6 +865,29 @@ def main() -> int:
             and (after_cancel["qq"].get("official") or {}).get("app_id") == mock_servers.OFFICIAL_APP_ID,
             str(after_cancel["llm"]),
         )
+
+        # 回归：LLM 密钥留空直接「完成」。_collect() 会过滤空值，patch["llm"] 里
+        # 没有 api_key 键，finish() 的日志曾直接下标访问 → KeyError 崩溃
+        settings_page.btn_onboarding.click()
+        third = wait_ui(app, lambda: window.onboarding is not None, timeout=15) and window.onboarding
+        checker.check("再次打开引导（用于留空完成回归）", third is not None, "onboarding=%s" % window.onboarding)
+        if third is not None:
+            third.llm_form.edit_key.setText("")
+            for _ in range(third.last_index):
+                third.btn_next.click()
+                wait_ui(app, lambda: True, timeout=0.3)
+            third.btn_next.click()
+            checker.check(
+                "LLM 密钥留空也能点「完成」（不崩溃、向导关闭）",
+                window.onboarding is None and not unhandled,
+                unhandled[0].splitlines()[-1] if unhandled else "（向导未关闭）",
+            )
+            after_empty = load_config(config_path)
+            checker.check(
+                "留空完成的向导不会把已保存的密钥清掉",
+                after_empty["llm"]["api_key"] == "mock-key",
+                str(after_empty["llm"]),
+            )
         checker.check("取消后也不再自动弹出", window.should_onboard() is False)
         checker.check(
             "界面槽函数没有未处理异常",

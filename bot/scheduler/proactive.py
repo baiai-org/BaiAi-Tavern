@@ -374,6 +374,14 @@ class ProactiveScheduler:
 
         # ---------------------------------------------------------- 生成
         hint = self._hint_text(trigger_type)
+        hub = getattr(self.rt, "media", None)
+        if hub is not None:
+            try:
+                media_hint = hub.media_hint()
+                if media_hint:
+                    hint = (hint + "\n" + media_hint).strip()
+            except Exception:  # pragma: no cover
+                pass
         outcome = await self.rt.engine.proactive(character, trigger_type=trigger_type, hint=hint)  # type: ignore[union-attr]
         content = str(outcome.get("content") or "").strip()
         if not content:
@@ -395,12 +403,29 @@ class ProactiveScheduler:
                 **base,
             }
 
-        # ---------------------------------------------------------- 发送
-        outcome_send = await bot.messaging.send_text(
-            content,
-            peer,
-            character_name=str(character.get("name") or ""),
-        )
+        # ---------------------------------------------------------- 发送（含语音 / 图片多媒体）
+        from ..media.hub import OutgoingReply
+
+        out = OutgoingReply(text=content, body=content)
+        if hub is not None:
+            try:
+                out = await hub.compose(character, content)
+            except Exception as exc:
+                log.warning("主动消息多媒体组装失败（按纯文字继续）：%s", exc)
+                out = OutgoingReply(text=content, body=content)
+            outcome_send = await hub.send_outgoing(
+                bot,
+                out,
+                is_group=bool(peer.is_group),
+                peer_id="" if peer.is_group else peer.peer_id,
+                group_id=peer.peer_id if peer.is_group else "",
+            )
+        else:
+            outcome_send = await bot.messaging.send_text(
+                content,
+                peer,
+                character_name=str(character.get("name") or ""),
+            )
         if not outcome_send.get("ok"):
             exc = outcome_send.get("error") or "未知错误"
             log.error("主动消息发送失败（机器人 %s / 角色 %s）：%s", bot.name, character.get("name"), exc)

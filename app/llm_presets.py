@@ -7,6 +7,8 @@
 
 模型名会随服务商更新而变化，所以预设里的模型名只是「候选/兜底」，
 界面上的模型输入框是可编辑下拉框：可以获取后选择，也可以自己填。
+
+顺序：国内直连 → 国际服务 → 聚合平台 → 自建网关 → 本地部署。
 """
 
 from __future__ import annotations
@@ -26,9 +28,11 @@ class Provider:
     docs: str = ""
     note: str = ""
     local: bool = False  # 本地部署：不需要 API Key
+    engine: str = ""  # 槽位预设专用：指定引擎（如 gemini-native），LLM 预设留空
 
 
 PRESETS: Tuple[Provider, ...] = (
+    # ============================================================ 国内直连
     Provider(
         key="deepseek",
         name="DeepSeek 官方",
@@ -38,41 +42,11 @@ PRESETS: Tuple[Provider, ...] = (
         note="性价比高，中文自然，推荐先用它",
     ),
     Provider(
-        key="openai",
-        name="OpenAI 官方",
-        base_url="https://api.openai.com/v1",
-        models=("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"),
-        docs="https://platform.openai.com/api-keys",
-        note="国内访问通常需要代理",
-    ),
-    Provider(
         key="dashscope",
         name="阿里云百炼（通义千问）",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        models=("qwen-plus", "qwen-turbo", "qwen-max"),
+        models=("qwen3-max", "qwen-plus", "qwen-turbo"),
         docs="https://bailian.console.aliyun.com/",
-    ),
-    Provider(
-        key="moonshot",
-        name="月之暗面 Kimi",
-        base_url="https://api.moonshot.cn/v1",
-        models=("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"),
-        docs="https://platform.moonshot.cn/console/api-keys",
-    ),
-    Provider(
-        key="zhipu",
-        name="智谱 GLM",
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-        models=("glm-4-plus", "glm-4-air", "glm-4-flash"),
-        docs="https://bigmodel.cn/usercenter/apikeys",
-    ),
-    Provider(
-        key="siliconflow",
-        name="硅基流动 SiliconFlow",
-        base_url="https://api.siliconflow.cn/v1",
-        models=("deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-7B-Instruct"),
-        docs="https://cloud.siliconflow.cn/account/ak",
-        note="一个 Key 可用多家开源模型",
     ),
     Provider(
         key="ark",
@@ -83,12 +57,26 @@ PRESETS: Tuple[Provider, ...] = (
         note="模型名需填「接入点 ID」（ep- 开头）",
     ),
     Provider(
-        key="openrouter",
-        name="OpenRouter",
-        base_url="https://openrouter.ai/api/v1",
-        models=(),
-        docs="https://openrouter.ai/keys",
-        note="聚合多家模型，需用「获取模型列表」挑模型",
+        key="zhipu",
+        name="智谱 GLM",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        models=("glm-4.5", "glm-4-plus", "glm-4-flash"),
+        docs="https://bigmodel.cn/usercenter/apikeys",
+    ),
+    Provider(
+        key="moonshot",
+        name="月之暗面 Kimi",
+        base_url="https://api.moonshot.cn/v1",
+        models=("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"),
+        docs="https://platform.moonshot.cn/console/api-keys",
+    ),
+    Provider(
+        key="siliconflow",
+        name="硅基流动 SiliconFlow",
+        base_url="https://api.siliconflow.cn/v1",
+        models=("deepseek-ai/DeepSeek-V3", "Qwen/Qwen3-235B-A22B", "Qwen/Qwen2.5-7B-Instruct"),
+        docs="https://cloud.siliconflow.cn/account/ak",
+        note="一个 Key 可用多家开源模型",
     ),
     Provider(
         key="minimax",
@@ -101,7 +89,7 @@ PRESETS: Tuple[Provider, ...] = (
         key="stepfun",
         name="阶跃星辰 StepFun",
         base_url="https://api.stepfun.com/v1",
-        models=("step-1-8k",),
+        models=("step-2-16k", "step-1-8k"),
         docs="https://platform.stepfun.com/interface-key",
     ),
     Provider(
@@ -109,7 +97,7 @@ PRESETS: Tuple[Provider, ...] = (
         name="零一万物 Yi",
         base_url="https://api.lingyiwanwu.com/v1",
         models=("yi-lightning", "yi-large"),
-        docs="https://platform.lingyiwanwu.com/apikeys",
+        docs="https://api.lingyiwanwu.com/apikeys",
     ),
     Provider(
         key="baichuan",
@@ -118,6 +106,159 @@ PRESETS: Tuple[Provider, ...] = (
         models=("Baichuan4", "Baichuan3-Turbo"),
         docs="https://platform.baichuan-ai.com/console/apikey",
     ),
+    Provider(
+        key="qianfan",
+        name="百度千帆（文心）",
+        base_url="https://qianfan.baidubce.com/v2",
+        models=("ernie-4.5-8k-preview", "ernie-4.0-turbo-8k", "ernie-speed-8k"),
+        docs="https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+    ),
+    Provider(
+        key="spark",
+        name="讯飞星火",
+        base_url="https://spark-api-open.xf-yun.com/v1",
+        models=("generalv4", "generalv3.5", "general"),
+        docs="https://console.xfyun.cn/",
+    ),
+    Provider(
+        key="hunyuan",
+        name="腾讯混元",
+        base_url="https://api.hunyuan.cloud.tencent.com/v1",
+        models=("hunyuan-turbo", "hunyuan-standard"),
+        docs="https://console.cloud.tencent.com/hunyuan",
+    ),
+    # ============================================================ 国际服务
+    Provider(
+        key="openai",
+        name="OpenAI 官方",
+        base_url="https://api.openai.com/v1",
+        models=("gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"),
+        docs="https://platform.openai.com/api-keys",
+        note="国内访问通常需要代理",
+    ),
+    Provider(
+        key="anthropic",
+        name="Anthropic Claude",
+        base_url="https://api.anthropic.com/v1",
+        models=("claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-haiku-latest"),
+        docs="https://console.anthropic.com/settings/keys",
+        note="OpenAI 兼容层；国内访问通常需要代理",
+    ),
+    Provider(
+        key="gemini",
+        name="Google Gemini（AI Studio）",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        models=("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"),
+        docs="https://aistudio.google.com/apikey",
+        note="Base URL 带 /v1beta/openai 段",
+    ),
+    Provider(
+        key="mistral",
+        name="Mistral",
+        base_url="https://api.mistral.ai/v1",
+        models=("mistral-large-latest", "mistral-small-latest", "codestral-latest"),
+        docs="https://console.mistral.ai/api-keys",
+    ),
+    Provider(
+        key="xai",
+        name="xAI（Grok）",
+        base_url="https://api.x.ai/v1",
+        models=("grok-3", "grok-3-mini", "grok-2-latest"),
+        docs="https://console.x.ai/",
+    ),
+    Provider(
+        key="groq",
+        name="Groq（超快推理）",
+        base_url="https://api.groq.com/openai/v1",
+        models=("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "deepseek-r1-distill-llama-70b"),
+        docs="https://console.groq.com/keys",
+        note="Llama 系模型速度极快",
+    ),
+    Provider(
+        key="together",
+        name="Together AI",
+        base_url="https://api.together.xyz/v1",
+        models=("meta-llama/Llama-3.3-70B-Instruct", "deepseek-ai/DeepSeek-R1"),
+        docs="https://api.together.xyz/settings/api-keys",
+    ),
+    Provider(
+        key="fireworks",
+        name="Fireworks AI",
+        base_url="https://api.fireworks.ai/inference/v1",
+        models=("accounts/fireworks/models/llama-v3p1-70b-instruct", "accounts/fireworks/models/deepseek-r1"),
+        docs="https://fireworks.ai/account/api-keys",
+    ),
+    Provider(
+        key="cerebras",
+        name="Cerebras（超快推理）",
+        base_url="https://api.cerebras.ai/v1",
+        models=("llama-3.3-70b", "llama-3.1-8b"),
+        docs="https://cloud.cerebras.ai/api_keys",
+    ),
+    Provider(
+        key="deepinfra",
+        name="DeepInfra",
+        base_url="https://api.deepinfra.com/v1/openai",
+        models=("deepseek-ai/DeepSeek-R1", "meta-llama/Meta-Llama-3.1-70B-Instruct"),
+        docs="https://deepinfra.com/dash/api_keys",
+    ),
+    Provider(
+        key="sambanova",
+        name="SambaNova",
+        base_url="https://api.sambanova.ai/v1",
+        models=("Meta-Llama-3.1-405B-Instruct", "Meta-Llama-3.3-70B-Instruct"),
+        docs="https://cloud.sambanova.ai/settings",
+    ),
+    Provider(
+        key="cohere",
+        name="Cohere",
+        base_url="https://api.cohere.ai/v1",
+        models=("command-r-plus", "command-r"),
+        docs="https://dashboard.cohere.com/api-keys",
+    ),
+    Provider(
+        key="perplexity",
+        name="Perplexity（联网问答）",
+        base_url="https://api.perplexity.ai",
+        models=("sonar", "sonar-pro", "sonar-reasoning"),
+        docs="https://www.perplexity.ai/settings/api",
+        note="回答自带实时网络检索来源",
+    ),
+    Provider(
+        key="novita",
+        name="Novita AI",
+        base_url="https://api.novita.ai/v3/openai",
+        models=("DeepSeek-V3-0324", "DeepSeek-R1-0528"),
+        docs="https://novita.ai/dashboard/key",
+        note="开源模型按量计费，价格低",
+    ),
+    # ============================================================ 聚合平台
+    Provider(
+        key="openrouter",
+        name="OpenRouter",
+        base_url="https://openrouter.ai/api/v1",
+        models=(),
+        docs="https://openrouter.ai/keys",
+        note="聚合多家模型，需用「获取模型列表」挑模型",
+    ),
+    Provider(
+        key="gate",
+        name="Gate.ai",
+        base_url="https://api.gate.ai/v1",
+        models=("deepseek/deepseek-chat", "anthropic/claude-3.5-sonnet"),
+        docs="https://www.gate.ai/",
+        note="聚合多家模型（模型名带厂商前缀）",
+    ),
+    # ============================================================ 自建网关
+    Provider(
+        key="gateway",
+        name="自建网关（OneAPI / NewAPI）",
+        base_url="http://127.0.0.1:3001/v1",
+        models=(),
+        note="把网关地址与 Key 填进来即可",
+        local=True,
+    ),
+    # ============================================================ 本地部署
     Provider(
         key="ollama",
         name="本地 Ollama",
@@ -145,11 +286,12 @@ PRESETS: Tuple[Provider, ...] = (
         local=True,
     ),
     Provider(
-        key="gateway",
-        name="自建网关（OneAPI / NewAPI）",
-        base_url="http://127.0.0.1:3001/v1",
+        key="localai",
+        name="本地 LocalAI",
+        base_url="http://127.0.0.1:8080/v1",
         models=(),
-        note="把网关地址与 Key 填进来即可",
+        docs="https://localai.io/",
+        note="用「获取模型列表」查看已下载的模型",
         local=True,
     ),
 )

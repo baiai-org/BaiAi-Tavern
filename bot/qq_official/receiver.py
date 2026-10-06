@@ -163,21 +163,49 @@ class OfficialReceiver:
             pass
 
     # ------------------------------------------------------------------ 发送
-    async def _reply(self, text: str, character: Dict[str, Any], incoming: IncomingMessage) -> bool:
-        bot = self.bot
-        official = bot.spec.official_config
+    async def _reply(self, out: Any, character: Dict[str, Any], incoming: IncomingMessage) -> bool:
+        """发送完整出站消息：文字（分段）+ 图片 + 语音（富媒体 msg_type=7）。"""
+        from ..media.hub import OutgoingReply
+
+        if not isinstance(out, OutgoingReply):  # 兼容旧签名（纯文字字符串）
+            out = OutgoingReply(text=str(out or ""), body=str(out or ""))
+        hub = self.runtime.media
+        if hub is None:
+            return await self._send_plain_text(out.body, incoming)
+        try:
+            result = await hub.send_outgoing(
+                self.bot,
+                out,
+                is_group=incoming.is_group,
+                peer_id=incoming.peer_id,
+                group_id=incoming.group_id,
+                message_id=incoming.message_id,
+                next_seq=lambda: self._next_seq(incoming.message_id),
+            )
+        except Exception as exc:
+            log.error("机器人「%s」官方通道发送失败：%s", self.bot.name, exc)
+            self.runtime.note_error("官方通道发送失败：%s" % exc)
+            self.runtime.publish({"type": "error", "scope": "send", "error": str(exc), "bot_id": self.bot.id})
+            return False
+        if not result.get("ok"):
+            self.runtime.note_error("官方通道发送失败：%s" % result.get("error"))
+            self.runtime.publish(
+                {"type": "error", "scope": "send", "error": result.get("error"), "bot_id": self.bot.id}
+            )
+        return bool(result.get("sent_text")) or bool(result.get("sent_media"))
+
+    async def _send_plain_text(self, text: str, incoming: IncomingMessage) -> bool:
+        """MediaHub 不可用时的纯文字发送（保底路径）。"""
+        from .client import segments_for_official
+
+        official = self.bot.spec.official_config
         max_len = int(official.get("reply_segment_max_len", 200) or 200)
         max_segments = int(official.get("max_reply_segments", 3) or 3)
         markdown = bool(official.get("markdown", False))
-
-        from .client import segments_for_official
-
-        segments = segments_for_official(text, max_len=max_len, max_segments=max_segments)
+        segments = segments_for_official(text or "", max_len=max_len, max_segments=max_segments)
         if not segments:
             return False
-
-        sender = bot.messaging.official_client()
-        char_name = str(character.get("name") or "")
+        sender = self.bot.messaging.official_client()
         sent_any = False
         for index, segment in enumerate(segments):
             seq = self._next_seq(incoming.message_id)
@@ -192,12 +220,12 @@ class OfficialReceiver:
                     )
                 sent_any = True
             except Exception as exc:
-                log.error("机器人「%s」官方通道发送失败（%s）：%s", bot.name, char_name, exc)
+                log.error("机器人「%s」官方通道发送失败：%s", self.bot.name, exc)
                 self.runtime.note_error("官方通道发送失败：%s" % exc)
-                self.runtime.publish({"type": "error", "scope": "send", "error": str(exc), "bot_id": bot.id})
+                self.runtime.publish({"type": "error", "scope": "send", "error": str(exc), "bot_id": self.bot.id})
                 break
             if index < len(segments) - 1:
-                await asyncio.sleep(0.8)  # 多段之间稍作停顿，避免撞频控
+                await asyncio.sleep(0.8)
         return sent_any
 
     def _next_seq(self, message_id: str) -> int:

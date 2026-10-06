@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
 from typing import List, Optional
@@ -190,7 +191,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     global _shared_memory
-    _shared_memory = QSharedMemory("BaiAi-Tavern-SingleInstance")
+    # 单实例锁是机器级命名键；BAIAI_INSTANCE_SUFFIX 供自检/多开场景使用，
+    # 避免打包自检与用户正在运行的实例互相抢锁（抢锁失败会弹模态框卡死）。
+    instance_suffix = os.environ.get("BAIAI_INSTANCE_SUFFIX", "").strip()
+    instance_key = "BaiAi-Tavern-SingleInstance" + ("-%s" % instance_suffix if instance_suffix else "")
+    _shared_memory = QSharedMemory(instance_key)
 
     app = QApplication(sys.argv[:1] if argv is None else [sys.argv[0]])
     app.setApplicationName(APP_NAME)

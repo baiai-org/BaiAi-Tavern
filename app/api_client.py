@@ -181,6 +181,40 @@ class ApiClient:
     def llm_test(self) -> Dict[str, Any]:
         return self._request("POST", "/api/llm/test", timeout=60.0)
 
+    # -------------------------------------------------------- 模型路由（V0.2）
+    def providers_status(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/providers")
+
+    def providers_test(
+        self, slot: str, voice: str = "", values: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """测试线路。``values`` 为表单当前值（未保存也能按界面状态测试）。"""
+        payload: Dict[str, Any] = {"slot": slot}
+        if voice:
+            payload["voice"] = voice
+        if values:
+            payload["values"] = values
+        return self._request("POST", "/api/providers/test", json=payload, timeout=180.0)
+
+    def media_voices(self, engine: str = "") -> List[Dict[str, str]]:
+        path = "/api/media/voices"
+        if engine:
+            path += "?engine=%s" % engine
+        data = self._request("GET", path, timeout=30.0)
+        if isinstance(data, dict):
+            return list(data.get("voices") or [])
+        return list(data or [])
+
+    def media_file_url(self, name: str) -> str:
+        return "%s/api/media/file?name=%s" % (self.base_url, name)
+
+    def media_file(self, name: str, timeout: float = 20.0) -> bytes:
+        data = self._request("GET", "/api/media/file", params={"name": name}, timeout=timeout)
+        return data if isinstance(data, (bytes, bytearray)) else b""
+
+    def media_inbox(self, limit: int = 20) -> List[Dict[str, Any]]:
+        return self._request("GET", "/api/media/inbox", params={"limit": limit})
+
     # ---------------------------------------------------------------- 角色
     def characters(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
         return self._request("GET", "/api/characters", params={"enabled_only": enabled_only})
@@ -235,6 +269,17 @@ class ApiClient:
         except ApiError:
             return None
         return data if isinstance(data, bytes) else None
+
+    def set_character_avatar(self, character_id: str, path: Path) -> Dict[str, Any]:
+        """上传自选头像图片。"""
+        path = Path(path)
+        data = path.read_bytes()
+        return self._request(
+            "PUT",
+            "/api/characters/%s/avatar" % character_id,
+            files={"file": (path.name, data, "application/octet-stream")},
+            timeout=60.0,
+        )
 
     # ---------------------------------------------------------------- 对话
     def conversations(self) -> List[Dict[str, Any]]:

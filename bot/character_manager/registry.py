@@ -130,6 +130,30 @@ class CharacterRegistry:
         return {"imported": results, "failed": failures}
 
     # ------------------------------------------------------------ 自定义角色
+    async def update_avatar(self, character_id: str, data: bytes, suffix: str = ".png") -> Optional[Dict[str, Any]]:
+        """替换角色头像（用户在界面上自选图片）。"""
+        row = await crud.get_character(self.db, character_id)
+        if not row:
+            return None
+        if not data:
+            raise CharacterCardError("头像文件为空")
+        if len(data) > 8 * 1024 * 1024:
+            raise CharacterCardError("头像图片过大（>8MB），请换一张小一点的")
+        suffix = (suffix or ".png").lower()
+        if suffix not in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+            suffix = ".png"
+        avatar_file = self.avatars_dir / ("%s%s" % (character_id, suffix))
+        avatar_file.write_bytes(data)
+        # 旧头像（不同扩展名）清掉，避免堆积
+        old = self.avatar_file(row)
+        if old and old != avatar_file and old.exists():
+            try:
+                old.unlink()
+            except Exception:
+                pass
+        log.info("角色 [%s] 更换头像：%s", character_id, avatar_file.name)
+        return await self.update(character_id, {"avatar_path": relpath(avatar_file)})
+
     async def create(self, fields: Dict[str, Any]) -> Dict[str, Any]:
         """不依赖角色卡，直接用界面填写的内容创建角色。"""
         name = str(fields.get("name") or "").strip()

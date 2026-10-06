@@ -24,6 +24,7 @@ from .accounts import BotAccount, build_bots
 from .ai_engine import AIEngine
 from .character_manager import CharacterRegistry
 from .database import Database, crud
+from .media.hub import MediaHub
 from .qq_official.messaging import MODE_OFFICIAL
 from .scheduler import ProactiveScheduler
 
@@ -41,6 +42,7 @@ class Runtime:
         self.engine: Optional[AIEngine] = None
         self.bots: List[BotAccount] = build_bots(self, self.config)
         self.scheduler = ProactiveScheduler(self)
+        self.media = MediaHub(self)
 
         # ---------------------------------------------------------- 控制接口
         self.host: str = str(self.config.get("api.host", "127.0.0.1") or "127.0.0.1")
@@ -281,6 +283,7 @@ class Runtime:
                 "base_url": self.config.get("llm.base_url", ""),
                 "configured": self.config.llm_configured(),
             },
+            "media": self._media_status(),
             "characters": {
                 "total": today.get("character_total", 0),
                 "enabled": today.get("character_enabled", 0),
@@ -295,6 +298,14 @@ class Runtime:
             "last_reply_preview": self.last_reply_preview,
             "last_user_openid": self.last_user_openid or await self._learned_openid(),
         }
+
+    def _media_status(self) -> Dict[str, Any]:
+        """多媒体能力状态（槽位是否配置、语音概率等），供 GUI 状态栏 / 模型路由页。"""
+        try:
+            return self.media.status()
+        except Exception as exc:  # pragma: no cover - 状态快照不应因多媒体报错
+            log.warning("读取多媒体状态失败：%s", exc)
+            return {"enabled": True, "any_configured": False, "slots": {}}
 
     async def _learned_openid(self) -> str:
         try:

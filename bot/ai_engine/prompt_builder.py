@@ -40,6 +40,24 @@ def _clean_block(text: Any) -> str:
     return _WHITESPACE_RE.sub("\n", value)
 
 
+_HTML_TAG_RE = re.compile(r"<[^<>]+>")
+
+
+def _notes_for_prompt(text: Any) -> str:
+    """creator_notes 按 V2 规范默认不进 prompt；这里只在它是短小纯文本时保留
+    （内置角色卡用它写一句场景备注）。Chub 卡片会把整张展示页的 HTML 塞进
+    creator_notes（可达上万字符），那属于展示内容，发给模型只会稀释人设。"""
+    value = _clean_block(text)
+    if not value:
+        return ""
+    if "<" in value and ">" in value:
+        plain = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", value)).strip()
+        if len(plain) > 300:
+            return ""
+        value = plain
+    return value[:500]
+
+
 def build_system_prompt(
     character: Mapping[str, Any],
     user_name: str = "你",
@@ -63,7 +81,7 @@ def build_system_prompt(
     add("描述", character.get("description"))
     add("性格", character.get("personality"))
     add("场景", character.get("scenario"))
-    add("你与对方的关系", character.get("creator_notes"))
+    add("你与对方的关系", _notes_for_prompt(character.get("creator_notes")))
 
     example = _clean_block(render_placeholders(_clean_block(character.get("mes_example")), name, user_name))
     if example:

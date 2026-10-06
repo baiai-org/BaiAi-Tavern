@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
+from urllib.parse import quote as _quote
 
 import httpx
 
@@ -245,13 +246,30 @@ def fetch_models(
             continue
 
         if response.status_code >= 400:
-            keep_going, message = _error_for_status(
-                response.status_code, response.text, key_empty=not (api_key or "").strip()
-            )
-            if not keep_going:
-                return {"ok": False, "models": [], "message": message, "endpoint": url, "total": 0}
-            last_error = message
-            continue
+            # 401/403 且填了 Key：部分服务（如 Gemini 原生 /v1beta）只认 ?key= 查询参数，
+            # 再试一次带 query 的同一地址
+            if response.status_code in (401, 403) and (api_key or "").strip() and "?" not in url:
+                try:
+                    with httpx.Client(timeout=timeout) as client:
+                        retry = client.get(
+                            "%s?key=%s" % (url, _quote(api_key)), headers={"Content-Type": "application/json"}
+                        )
+                    if retry.status_code < 400:
+                        response = retry
+                    else:
+                        last_error = "鉴权失败（HTTP %d）：请检查 API Key" % retry.status_code
+                        continue
+                except httpx.HTTPError:
+                    last_error = "请求失败（带 key 重试）"
+                    continue
+            if response.status_code >= 400:
+                keep_going, message = _error_for_status(
+                    response.status_code, response.text, key_empty=not (api_key or "").strip()
+                )
+                if not keep_going:
+                    return {"ok": False, "models": [], "message": message, "endpoint": url, "total": 0}
+                last_error = message
+                continue
 
         try:
             payload = response.json()

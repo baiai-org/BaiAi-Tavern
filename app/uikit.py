@@ -317,6 +317,19 @@ def _draw_icon_pixmap(name: str, size: int, color: str):
                 QPointF(16 * unit + 9 * unit * cos(rad), 16 * unit + 9 * unit * sin(rad)),
                 QPointF(16 * unit + 12.5 * unit * cos(rad), 16 * unit + 12.5 * unit * sin(rad)),
             )
+    elif name == "chip":  # 模型路由：芯片 + 引脚
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(col, max(1.6, size * 0.10), Qt.SolidLine, Qt.RoundCap))
+        painter.drawRoundedRect(QRectF(9 * unit, 9 * unit, 14 * unit, 14 * unit), 2.4 * unit, 2.4 * unit)
+        painter.setBrush(QBrush(col))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(QRectF(13 * unit, 13 * unit, 6 * unit, 6 * unit), 1.4 * unit, 1.4 * unit)
+        for offset in (12.0, 16.0, 20.0):
+            for end in (6.0, 26.0):
+                painter.drawLine(QPointF(offset * unit, 7.5 * unit), QPointF(offset * unit, 9 * unit))
+                painter.drawLine(QPointF(offset * unit, end * unit), QPointF(offset * unit, (end - 1.5) * unit))
+                painter.drawLine(QPointF(7.5 * unit, offset * unit), QPointF(9 * unit, offset * unit))
+                painter.drawLine(QPointF(end * unit, offset * unit), QPointF((end - 1.5) * unit, offset * unit))
     else:  # pragma: no cover - 未定义的图标名画一个圆点，避免运行时出错
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(col))

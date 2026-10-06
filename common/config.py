@@ -80,6 +80,51 @@ DEFAULTS: Dict[str, Any] = {
             "嗨，今天过得怎么样？",
         ],
     },
+    # 多模态模型路由（V0.2）：每个能力单独配端点 / 模型 / 凭据。
+    # 留空的槽位自动降级（不影响文字对话）。chat 留空时回退上面的 llm 段。
+    # 引擎：openai（OpenAI 兼容端点，本地服务把 base_url 指向本机即可）/
+    #       edge-tts（文字转语音专用，在线免费，无需 API Key）/
+    #       gemini-native（图像生成专用，Gemini 原生接口，支持全部 Gemini 图像模型）
+    # 听语音（语音转文字）不占槽位：QQ 官方平台随语音消息推送参考转写，零配置。
+    # 主模型（chat 槽位）统一读 llm 段；providers.chat 仅在 llm 段未配置时兜底
+    "providers": {
+        "chat": {
+            "engine": "openai",
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+        },
+        "vision": {
+            "engine": "openai",
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+        },
+        "image": {
+            "engine": "openai",
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+        },
+        "tts": {
+            # 推荐默认：阿里云百炼 qwen-audio（自动启用情感与拟声标签 + 语气指令 +
+            # 语速/音调/音量调节），用户只需填 API Key；edge-tts / openai 随时可切
+            "engine": "dashscope",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "",
+            "model": "qwen-audio-3.1-tts-flash",
+            "voice": "yuxiaoyun_v3.1",
+        },
+    },
+    # 富媒体（V0.2 图片 / 语音）行为
+    "media": {
+        "enabled": True,               # 总开关：关闭后只收发纯文字
+        "voice_reply_probability": 0.1,  # 回复改用语音的概率（0.0~1.0），单聊/群聊/主动消息通用
+        "allow_image": True,           # 允许角色给你发图（回复里出现 [IMG] 描述时触发生成）
+        "voice_max_chars": 180,        # 单条语音对应的文字上限，超过会拆成多条语音
+        "image_marker": "[IMG]",       # 角色想发图时写在回复里的标记（后跟绘图描述）
+        "temp_days": 3,                # 收发的临时媒体文件保留天数
+    },
     # 机器人列表：第 1 个机器人就是下面的 qq: 段，第 2..N 个写在这里
     # （每一项与 qq: 段同构，可以各自绑定不同的角色）
     "bots": [],
@@ -290,6 +335,13 @@ def strip_legacy_keys(raw: Dict[str, Any]) -> "tuple":
             if key in app:
                 app.pop(key, None)
                 removed.append("app.%s" % key)
+
+    # V0.2 开发中删除了 asr 槽位（语音转文字改用 QQ 官方平台自带的参考转写）：
+    # 老配置里可能还留着 providers.asr 段，直接清掉
+    providers = data.get("providers")
+    if isinstance(providers, dict) and "asr" in providers:
+        providers.pop("asr", None)
+        removed.append("providers.asr")
 
     return data, removed
 

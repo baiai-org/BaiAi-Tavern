@@ -29,6 +29,8 @@ class CharacterCard(QFrame):
     delete_requested = Signal(str)
     proactive_requested = Signal(str)
     bind_requested = Signal(str)
+    voice_requested = Signal(str)
+    avatar_requested = Signal(str)
     clicked = Signal(str)
 
     def __init__(self, data: Dict[str, Any], parent: Optional[QWidget] = None):
@@ -46,6 +48,11 @@ class CharacterCard(QFrame):
         # ------------------------------------------------------------ 头像
         self.avatar = QLabel(self)
         self.avatar.setFixedSize(64, 64)
+        self.avatar.setCursor(Qt.PointingHandCursor)
+        self.avatar.setToolTip("点击更换这个角色自己的头像")
+        self.avatar.mousePressEvent = lambda event: (  # type: ignore[method-assign]
+            event.button() == Qt.LeftButton and self.avatar_requested.emit(self.character_id)
+        )
         self.avatar.setPixmap(placeholder_avatar(str(data.get("name") or "?"), 64))
         layout.addWidget(self.avatar, 0, Qt.AlignTop)
 
@@ -98,12 +105,16 @@ class CharacterCard(QFrame):
         self.edit_button = ghost_button("编辑", self)
         self.edit_button.setProperty("chip", True)
         self.edit_button.clicked.connect(lambda: self.edit_requested.emit(self.character_id))
+        self.voice_button = ghost_button("音色", self)
+        self.voice_button.setProperty("chip", True)
+        self.voice_button.clicked.connect(lambda: self.voice_requested.emit(self.character_id))
         self.delete_button = ghost_button("删除", self)
         self.delete_button.setProperty("chip", True)
         self.delete_button.clicked.connect(lambda: self.delete_requested.emit(self.character_id))
         buttons.addWidget(self.proactive_button)
         buttons.addWidget(self.bind_button)
         buttons.addWidget(self.edit_button)
+        buttons.addWidget(self.voice_button)
         buttons.addWidget(self.delete_button)
         buttons.addStretch(1)
         actions.addLayout(buttons)

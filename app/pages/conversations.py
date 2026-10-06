@@ -138,6 +138,9 @@ class ConversationsPage(Page):
     def refresh(self) -> None:
         def _ok(result: Any) -> None:
             conversations: List[Dict[str, Any]] = result if isinstance(result, list) else []
+            # 重新填充表格会清掉现有选中；记住当前角色，填充后把选中跟回去，
+            # 否则点「刷新」后消息面板会停在旧角色上不再更新
+            prev_id = self.current_character_id
             self.conversation_table.setRowCount(len(conversations))
             for row, item in enumerate(conversations):
                 name_item = QTableWidgetItem(str(item.get("name") or "未知"))
@@ -148,8 +151,16 @@ class ConversationsPage(Page):
                 self.conversation_table.setItem(row, 1, count_item)
                 self.conversation_table.setItem(row, 2, QTableWidgetItem(str(item.get("last_at") or "-")))
                 self.conversation_table.setItem(row, 3, QTableWidgetItem(truncate(item.get("last_content") or "-", 60)))
-            if conversations and self.current_character_id is None:
-                self.conversation_table.selectRow(0)
+            if not conversations:
+                self.current_character_id = None
+                return
+            target = 0
+            if prev_id:
+                for row, item in enumerate(conversations):
+                    if str(item.get("character_id") or "") == prev_id:
+                        target = row
+                        break
+            self.conversation_table.selectRow(target)
 
         self.run_task(self.api().conversations, on_ok=_ok, key="load_conversations", label="加载会话")
 
@@ -183,13 +194,25 @@ class ConversationsPage(Page):
                 speaker = self.current_character_name if role == "assistant" else "我"
                 if int(item.get("is_proactive") or 0) == 1:
                     speaker += "（主动）"
+                content_text = str(item.get("content") or "")
+                kind = str(item.get("kind") or "text")
+                if kind == "image":
+                    # 图片消息：入库时已带【图片】前缀，缺了则补上
+                    if "【图片】" not in content_text:
+                        content_text = ("【图片】" + content_text).strip()
+                else:
+                    # 回复里的 [IMG] 生图标记已在 QQ 里发成图片，这里不重复展示
+                    lines = [ln for ln in content_text.splitlines() if not ln.strip().upper().startswith("[IMG]")]
+                    cleaned = "\n".join(lines).strip()
+                    if cleaned:
+                        content_text = cleaned
                 self.message_table.setItem(row, 0, QTableWidgetItem(str(item.get("created_at") or "")))
                 speaker_item = QTableWidgetItem(speaker)
                 speaker_item.setForeground(
                     Qt.GlobalColor.gray if role != "assistant" else Qt.GlobalColor.white
                 )
                 self.message_table.setItem(row, 1, speaker_item)
-                self.message_table.setItem(row, 2, QTableWidgetItem(str(item.get("content") or "")))
+                self.message_table.setItem(row, 2, QTableWidgetItem(content_text))
             self.message_table.resizeRowsToContents()
             if messages:
                 self.message_table.scrollToBottom()

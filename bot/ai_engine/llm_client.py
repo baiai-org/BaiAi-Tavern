@@ -52,10 +52,14 @@ class LLMClient:
     # ---------------------------------------------------------------- 构造
     @classmethod
     def from_config(cls, config: Any) -> "LLMClient":
+        """从配置构造（chat 槽位；未填 chat 槽位时自动回退旧版 llm 段）。"""
+        from common.providers import SLOT_CHAT, load_slot
+
+        spec = load_slot(config, SLOT_CHAT)
         return cls(
-            base_url=str(config.get("llm.base_url", "https://api.deepseek.com/v1") or ""),
-            api_key=str(config.get("llm.api_key", "") or ""),
-            model=str(config.get("llm.model", "deepseek-chat") or "deepseek-chat"),
+            base_url=spec.base_url or str(config.get("llm.base_url", "https://api.deepseek.com/v1") or ""),
+            api_key=spec.api_key or str(config.get("llm.api_key", "") or ""),
+            model=spec.model or str(config.get("llm.model", "deepseek-chat") or "deepseek-chat"),
             max_tokens=int(config.get("llm.max_tokens", 500) or 500),
             temperature=float(config.get("llm.temperature", 0.85) or 0.85),
             top_p=float(config.get("llm.top_p", 1.0) or 1.0),
@@ -65,9 +69,12 @@ class LLMClient:
 
     def apply_config(self, config: Any) -> None:
         """配置热重载时同步参数。"""
-        self.base_url = str(config.get("llm.base_url", self.base_url) or self.base_url)
-        self.api_key = str(config.get("llm.api_key", self.api_key) or "")
-        self.model = str(config.get("llm.model", self.model) or self.model)
+        from common.providers import SLOT_CHAT, load_slot
+
+        spec = load_slot(config, SLOT_CHAT)
+        self.base_url = spec.base_url or str(config.get("llm.base_url", self.base_url) or self.base_url)
+        self.api_key = spec.api_key or str(config.get("llm.api_key", self.api_key) or "")
+        self.model = spec.model or str(config.get("llm.model", self.model) or self.model)
         self.max_tokens = int(config.get("llm.max_tokens", self.max_tokens) or self.max_tokens)
         self.temperature = float(config.get("llm.temperature", self.temperature) or self.temperature)
         self.top_p = float(config.get("llm.top_p", self.top_p) or self.top_p)
@@ -75,7 +82,16 @@ class LLMClient:
         self.max_retries = max(0, int(config.get("llm.max_retries", self.max_retries) or 0))
 
     def configured(self) -> bool:
-        return bool(self.api_key.strip()) and bool(self.base_url.strip())
+        """是否已配置到可调用。本地 / 局域网端点（10.x / 192.168.x /
+        172.16-31.x / .local / 回环）无需 API Key——与测试线路的判定一致，
+        否则界面提示"可留空"、实际回复却报"尚未配置"。"""
+        if not (self.base_url or "").strip():
+            return False
+        if (self.api_key or "").strip():
+            return True
+        from common.providers import is_local_endpoint
+
+        return is_local_endpoint(self.base_url)
 
     # ---------------------------------------------------------------- 客户端
     def _ensure_client(self) -> Any:
@@ -91,9 +107,11 @@ class LLMClient:
             raise LLMError("缺少 openai 依赖，请执行 pip install -r requirements.txt")
         if not self.configured():
             raise LLMError("尚未配置 LLM 的 base_url / api_key")
+        # OpenAI SDK 2.x 对空 api_key 会在发请求时报 Missing credentials；
+        # 本地 / 局域网端点不需要鉴权，用占位 Key 补上（服务端会忽略）
         self._client = AsyncOpenAI(
             base_url=self.base_url,
-            api_key=self.api_key,
+            api_key=self.api_key or "baiai-local",
             timeout=self.timeout,
             max_retries=0,  # 重试由本类统一控制
         )
@@ -133,7 +151,11 @@ class LLMClient:
             payload["stop"] = overrides["stop"]
 
         last_error = ""
+        # 推理类模型（vLLM reasoning 字段）会先消耗思考 token 再输出正文；
+        # 长度不够时正文为空——重试时把长度翻倍，比同参数重试更可能成功
+        attempt_max_tokens = payload["max_tokens"]
         for attempt in range(self.max_retries + 1):
+            payload["max_tokens"] = attempt_max_tokens
             try:
                 client = self._ensure_client()
                 response = await client.chat.completions.create(**payload)
@@ -143,6 +165,7 @@ class LLMClient:
                     self.last_usage = self._extract_usage(response)
                     return content
                 last_error = "模型返回了空内容"
+                attempt_max_tokens = min(attempt_max_tokens * 2, 4096)
             except LLMError:
                 raise
             except Exception as exc:
@@ -203,7 +226,7 @@ class LLMClient:
                     {"role": "system", "content": "你是一个测试助手。"},
                     {"role": "user", "content": "只回复两个字：正常"},
                 ],
-                max_tokens=16,
+                max_tokens=128,
                 temperature=0.0,
             )
             return {"ok": True, "model": self.model, "reply": reply, "error": ""}

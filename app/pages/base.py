@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -72,6 +73,11 @@ class Page(QWidget):
             scroll = QScrollArea(self)
             scroll.setWidgetResizable(True)
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # 内容容器允许收缩到比子控件最小宽度更窄：否则任何一个不换行的
+            # 长文本控件（标签 / 下拉项 / 路径）都会把整页撑宽，右侧被裁掉，
+            # 表现为页面"突然偏移、显示不全"（历史坑：TTS 百炼提示标签 2553px）
+            container.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            container.setMinimumWidth(0)
             scroll.setWidget(container)
             root.addWidget(scroll, 1)
             self.scroll_area = scroll

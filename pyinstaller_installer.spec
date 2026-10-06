@@ -60,7 +60,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="BaiAi-Tavern V0.1",
+    name="BaiAi-Tavern V0.2",
     debug=False,
     strip=False,
     upx=False,

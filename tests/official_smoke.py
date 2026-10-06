@@ -78,6 +78,8 @@ def write_official_config(data_dir: Path, api_port: int, mock_url: str, **offici
     config["qq"]["official"].update(official_overrides)
     config["qq"]["group_reply_enabled"] = True
     config.setdefault("app", {})["start_bot_on_launch"] = False
+    # V0.2：基线 e2e 保持纯文字回复（语音概率 0），富媒体段落里再单独打开
+    config.setdefault("media", {})["voice_reply_probability"] = 0.0
     path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return path
 
@@ -504,6 +506,131 @@ def main() -> int:
             "重启后的主动消息仍然是「无 msg_id」形态",
             bool(after_restart) and not after_restart[0].get("msg_id"),
             str(after_restart[:1]),
+        )
+
+        # ------------------------------------------------------------ V0.2 富媒体
+        checker.phase("V0.2 富媒体：语音 / 图片双向（mock 线路）")
+        # 四条线路全部指向 mock 服务（与 GUI「模型路由」保存走同一个接口；
+        # 语音转文字不占线路——用 QQ 官方平台随消息推送的参考转写）
+        media_patch = {
+            "providers": {
+                "vision": {"engine": "openai", "base_url": "%s/v1" % mock.base_url, "api_key": "mock-key", "model": "mock-vision"},
+                "image": {"engine": "openai", "base_url": "%s/v1" % mock.base_url, "api_key": "mock-key", "model": "mock-image"},
+                "tts": {"engine": "openai", "base_url": "%s/v1" % mock.base_url, "api_key": "mock-key", "model": "mock-tts"},
+            },
+            "media": {
+                "enabled": True,
+                "voice_reply_probability": 1.0,
+                "allow_image": True,
+                "voice_max_chars": 180,
+                "temp_days": 3,
+            },
+        }
+        patch_ok = client.put("/api/config", json=media_patch).status_code == 200
+        checker.check("模型路由配置通过 API 写入（GUI 保存同款路径）", patch_ok)
+        providers_state = client.get("/api/providers").json()
+        checker.check(
+            "状态接口能列出全部四条线路",
+            all(slot in (providers_state.get("slots") or {}) for slot in ("chat", "vision", "image", "tts")),
+            str(sorted((providers_state.get("slots") or {}).keys())),
+        )
+
+        # ------------------------------------------------- 语音回复（TTS）
+        mock.reset(reply_text="我现在用语音跟你说。", proactive_text="mock 主动消息。")
+        emitted = mock.emit_c2c("我们用语音聊天吧")
+        voice_replied = wait_for(
+            lambda: any(i.get("file_info") for i in mock.official_sent() if i.get("kind") == "c2c"),
+            timeout=90,
+        )
+        checker.check("文字消息收到语音回复（TTS 合成 + 富媒体发送）", voice_replied, str(mock.official_sent())[-300:])
+        if voice_replied:
+            voice_rec = next(i for i in mock.official_sent() if i.get("file_info"))
+            checker.check(
+                "语音回复带 msg_id 与 msg_seq（被动回复序号）",
+                voice_rec.get("msg_id") == emitted.get("id") and int(voice_rec.get("msg_seq") or 0) >= 1,
+                str({k: voice_rec.get(k) for k in ("msg_id", "msg_seq")}),
+            )
+            checker.check("TTS 线路被真实调用", int(mock.state().get("tts_calls", 0)) >= 1, str(mock.state().get("tts_calls")))
+            checker.check("语音以 file_type=3 上传", any(u.get("file_type") == 3 for u in mock.media_uploads()), str(mock.media_uploads())[-200:])
+            checker.check(
+                "语音回复没有重复发文字（整条改为语音）",
+                not any(i.get("kind") == "c2c" and i.get("content") for i in mock.official_sent()),
+                str([i.get("content") for i in mock.official_sent()]),
+            )
+
+        # ------------------------------------------------- 图像理解（vision）
+        client.put("/api/config", json={"media": {"voice_reply_probability": 0.0}})
+        mock.reset(reply_text="这条不该出现（vision 优先）", vision_text="我看你发的图了：一个蓝色的小方块。")
+        emitted = mock.client.post(
+            "/__control/emit_c2c",
+            json={"attachments": [{"url": mock.attachment_url("test.png"), "filename": "test.png", "content_type": "image/png"}]},
+        ).json()
+        vision_replied = wait_for(
+            lambda: any("我看你发的图了" in str(i.get("content")) for i in mock.official_sent()),
+            timeout=90,
+        )
+        checker.check("纯图片消息经视觉线路理解后回复文字", vision_replied, str(mock.official_sent())[-300:])
+        checker.check("视觉线路被真实调用（请求带 image_url）", int(mock.state().get("vision_calls", 0)) >= 1, str(mock.state().get("vision_calls")))
+        checker.check(
+            "图片挂在当前（最后一条）user 消息上发给视觉模型",
+            mock.state().get("vision_image_in_last_user") is True,
+            str({k: mock.state().get(k) for k in ("vision_calls", "vision_image_in_last_user")}),
+        )
+        checker.check("图片附件被下载", int(mock.state().get("media_files_served", 0)) >= 1, str(mock.state().get("media_files_served")))
+
+        # ------------------------------------------------- [IMG] 生图 + 多段序号
+        client.put("/api/config", json={"media": {"voice_reply_probability": 1.0}})
+        mock.reset(reply_text="看，我给你画好了\n[IMG] 一只在月球上喝茶的猫")
+        emitted = mock.emit_c2c("给我画张图吧")
+        gen_replied = wait_for(
+            lambda: sum(1 for i in mock.official_sent() if i.get("file_info")) >= 2,
+            timeout=120,
+        )
+        checker.check("[IMG] 标记触发生图并随语音一起发出", gen_replied, str(mock.official_sent())[-400:])
+        if gen_replied:
+            recs = [i for i in mock.official_sent() if i.get("file_info")]
+            checker.check("图片以 file_type=1 上传", any(u.get("file_type") == 1 for u in mock.media_uploads()), str(mock.media_uploads())[-200:])
+            checker.check("生图线路被真实调用", int(mock.state().get("image_gen_calls", 0)) >= 1, str(mock.state().get("image_gen_calls")))
+            checker.check(
+                "多条富媒体按 msg_seq 递增发送",
+                sorted(int(r.get("msg_seq") or 0) for r in recs) == [1, 2],
+                str([(r.get("msg_seq")) for r in recs]),
+            )
+            checker.check("富媒体回复都带 msg_id", all(r.get("msg_id") == emitted.get("id") for r in recs), str(recs))
+
+        # ------------------------------------------------- 语音理解（平台参考转写，零配置）
+        client.put("/api/config", json={"media": {"voice_reply_probability": 0.0}})
+        mock.reset(reply_text="我听见你刚才说的话了。")
+        _voice_served_before = int(mock.state().get("media_files_served", 0))
+        mock.client.post(
+            "/__control/emit_c2c",
+            json={
+                "attachments": [
+                    {
+                        "url": mock.attachment_url("test.silk"),
+                        "voice_wav_url": mock.attachment_url("wav_variant.bin"),
+                        "filename": "voice.silk",
+                        "content_type": "audio/silk",
+                        "asr_refer_text": "我饿了",
+                    }
+                ]
+            },
+        )
+        refer_replied = wait_for(
+            lambda: any("我听见你刚才说的话了" in str(i.get("content")) for i in mock.official_sent()),
+            timeout=90,
+        )
+        checker.check("语音消息经平台参考转写正常回复", refer_replied, str(mock.official_sent())[-300:])
+        checker.check(
+            "参考转写文本进了模型上下文（asr_refer_text → LLM 请求）",
+            "我饿了" in str(mock.state().get("last_llm_user_text", "")),
+            str(mock.state().get("last_llm_user_text", ""))[:200],
+        )
+        checker.check(
+            "语音附件不被下载（url / voice_wav_url 均不请求）",
+            int(mock.state().get("media_files_served", 0)) == _voice_served_before
+            and int(mock.state().get("wav_variant_served", 0)) == 0,
+            str({k: mock.state().get(k) for k in ("media_files_served", "wav_variant_served")}),
         )
 
         checker.check("再次优雅退出", client.post("/api/shutdown", timeout=15).status_code == 200)

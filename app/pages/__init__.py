@@ -6,6 +6,7 @@ from .characters import CharactersPage  # noqa: F401
 from .conversations import ConversationsPage  # noqa: F401
 from .dashboard import DashboardPage  # noqa: F401
 from .logs import LogsPage  # noqa: F401
+from .models import ModelsPage  # noqa: F401
 from .proactive import ProactivePage  # noqa: F401
 from .settings import SettingsPage  # noqa: F401
 
@@ -15,6 +16,7 @@ __all__ = [
     "ConversationsPage",
     "DashboardPage",
     "LogsPage",
+    "ModelsPage",
     "Page",
     "ProactivePage",
     "SettingsPage",
