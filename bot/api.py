@@ -979,6 +979,21 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> Any: 
 
 # ============================================================= WebSocket ====
 def register_websocket(app: Any) -> None:
+    async def _watch_disconnect(websocket: WebSocket) -> None:
+        """监视客户端侧的断开 / 关闭（消费 receive 消息，内容忽略）。
+
+        只发不收的处理器会在 uvicorn 关闭时永远阻塞在 ``queue.get()``，
+        导致「Waiting for background tasks to complete」卡死整个进程退出；
+        这个监视任务让处理器在对端断开时立刻结束。
+        """
+        while True:
+            try:
+                await websocket.receive()
+            except WebSocketDisconnect:
+                return
+            except Exception:
+                return
+
     async def _events(websocket: WebSocket) -> None:
         runtime = _runtime
         if runtime is None:
@@ -986,18 +1001,30 @@ def register_websocket(app: Any) -> None:
             return
         await websocket.accept()
         queue = runtime.subscribe()
+        watcher = asyncio.create_task(_watch_disconnect(websocket))
         try:
             await websocket.send_json(
                 {"type": "hello", "at": iso_now(), "status": await runtime.snapshot()}
             )
-            while True:
-                event = await queue.get()
-                await websocket.send_json(event)
+            while not watcher.done():
+                get_task = asyncio.ensure_future(queue.get())
+                try:
+                    done, _pending = await asyncio.wait(
+                        {get_task, watcher}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    if not get_task.done():
+                        get_task.cancel()
+                if watcher in done:
+                    break
+                await websocket.send_json(get_task.result())
         except WebSocketDisconnect:
             pass
         except Exception as exc:  # pragma: no cover
             log.debug("WebSocket 连接结束: %s", exc)
         finally:
+            if not watcher.done():
+                watcher.cancel()
             runtime.unsubscribe(queue)
 
     for path in ("/ws/events", "/api/ws/events"):

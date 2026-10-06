@@ -734,6 +734,30 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.exe（组装 payload → 
       自动选——用户点「刷新」后消息面板会停在旧角色上。现在 `_ok` 记住 prev_id，
       填充后按该角色**跟回选中行**（角色已不存在则回落到第 0 行；列表清空时
       `current_character_id` 置 None）。
+40. **自检 149 项全过、进程却以退出码 1 结束（V0.2 发布后 CI 首次红，根因两层）**：
+    - **第一层（bot 侧）**：`/ws/events` 处理器原来只 `await queue.get()` 从不断言对端
+      存活，uvicorn 关闭时该后台任务永远阻塞 → bot 卡死在
+      「Waiting for background tasks to complete」，不跑 lifespan shutdown（bot.log 停在
+      `Shutting down`，没有「Bot 进程正在退出…」）。修法：处理器里加一个
+      `_watch_disconnect` 任务并发 `await websocket.receive()`（对端断开时
+      `WebSocketDisconnect` 被消费掉），主循环用 `asyncio.wait({get_task, watcher})`
+      两边都等；另外 `uvicorn.run(timeout_graceful_shutdown=8)` 兜底——**任何新的
+      后台任务/长连接都要问一句「服务端 shutdown 时它怎么结束」**。
+    - **第二层（GUI 侧，真正的非 0 退出码来源）**：bot 慢退（20 秒）期间 EventStream
+      处于重连退避（`msleep` 最长 15 秒），`stop()` 原来只 `wait(3000)` → 超时后
+      `self.event_stream = None` 释放最后一个引用 → **QThread C++ 对象在线程还跑着时
+      被析构** → Qt 打印 `QThread: Destroyed while thread '' is still running` 并
+      `__fastfail`（0xC0000409，本地实测退出码 -1073740791，GitHub Actions 报 exit code 1）。
+      修法：`EventStream.stop()` 循环 `wait(500)` 直到 `isRunning()==False`（上限 20 秒），
+      退避上限 15s→5s；`TaskRunner.shutdown()` 的 `waitForDone` 3s→10s（池线程同类风险）。
+    - **防回归**：gui_smoke 把 bot 的 `/api/shutdown` 收尾从 `finally` 静默等待挪进
+      检查正文——bot 15 秒未退出直接 `[FAIL] Bot 进程在 /api/shutdown 后 15 秒内退出
+      （无泄漏的后台任务）`，不再无声强杀。`finally` 里保留 `bot_stopped` 守卫的兜底
+      清理（try 中途异常时仍能杀掉 bot）。
+    - **诊断路径备忘**：这类「全过但非 0 退出」先看**汇总行之后**的 stderr——
+      failfast 前 Qt 会打 `QThread: Destroyed while ...`；CI 日志用 API 拉
+      （`GET /actions/jobs/{id}/logs` 302 重定向时要**去掉 Authorization 头**，
+      否则 blob 存储 403）。
 
 ---
 
@@ -751,8 +775,7 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.exe（组装 payload → 
 
 **待办 / 可做**
 
-- [ ] **V0.2 真机验证**：用户用真实 QQ + 真实线路跑通「看图 / 回语音 / [IMG] 发图」全链路，
-  验证通过后由用户明确指令再打包（`scripts\build.bat` + `build_installer.bat`）并发 Release。
+- [x] **V0.2 真机验证 + 发布**（已完成）：用户真实 QQ 验证通过 → 打包 → `main` 合入 V0.2、tag `v0.2`、GitHub Release `v0.2`（安装包 + SHA256SUMS.txt）已上传，自动更新链路生效。历史坑见坑 40（CI 首跑 gui 自检 exit code 1 的双层根因与修法）。
   「听语音」零配置（官方平台参考转写），真机重点确认**有参考转写时角色能听懂**（已验证过一次：
   11:05 语音消息日志里出现参考转写并正常回复）；「[IMG] 发图」用 Gemini 时选**原生接口预设**
   （nano banana 2 系列，已用真实 Key 实测出图，见坑 29 与 worktree 根目录实测图），真机确认一次即可。

@@ -34,7 +34,14 @@ class EventStream(QThread):
     def stop(self) -> None:
         self._stop = True
         self.requestInterruption()
-        self.wait(3000)
+        # 线程可能正处在重连退避的 msleep（最长 5 秒）里，requestInterruption
+        # 不会打断它——必须等到线程真正结束再让对象销毁，否则 Qt 会
+        # 「QThread: Destroyed while thread is still running」并 failfast
+        # 杀掉整个进程（自检退出码 1 的根因之一）。
+        waited = 0
+        while self.isRunning() and waited < 20000:
+            self.wait(500)
+            waited += 500
 
     # ---------------------------------------------------------------- 内部
     def _set_connected(self, value: bool) -> None:
@@ -81,7 +88,7 @@ class EventStream(QThread):
             if self._stop:
                 break
             self.msleep(int(delay * 1000))
-            delay = min(delay * 1.8, 15.0)
+            delay = min(delay * 1.8, 5.0)
 
 
 __all__ = ["EventStream"]

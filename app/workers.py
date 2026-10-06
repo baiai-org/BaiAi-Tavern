@@ -111,7 +111,9 @@ class TaskRunner(QObject):
         self._keys.clear()
         try:
             self.pool.clear()
-            self.pool.waitForDone(3000)
+            # 池线程若在等待期间被销毁，Qt 同样会 failfast；HTTP 任务通常毫秒级，
+            # 10 秒上限足够覆盖个别慢请求，避免线程还在跑时池对象先死
+            self.pool.waitForDone(10000)
         except Exception:
             pass
 

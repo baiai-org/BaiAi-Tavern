@@ -386,6 +386,7 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     context = None
     window = None
+    bot_stopped = False
     unhandled: List[str] = []
     dialogs: List[str] = []
     install_excepthook(unhandled)
@@ -1709,6 +1710,26 @@ def main() -> int:
             unhandled[0].splitlines()[-1] if unhandled else "",
         )
 
+        # Bot 收尾放在 return 之前：/api/shutdown 后 bot 必须及时退出。
+        # 之前只在 finally 里静默等 20 秒再强杀：bot 卡住时 EventStream 正处在
+        # 重连退避里，stop() 的短暂等待不够，QThread 析构触发 Qt failfast
+        # （0xC0000409）——自检 149 项全过、进程却以非 0 退出码结束（CI 报 1）。
+        try:
+            client.post("/api/shutdown", timeout=10)
+        except Exception:
+            pass
+        deadline = time.time() + 15
+        while time.time() < deadline and bot.poll() is None:
+            time.sleep(0.3)
+        if bot.poll() is None:
+            checker.check(
+                "Bot 进程在 /api/shutdown 后 15 秒内退出（无泄漏的后台任务）",
+                False,
+                "查 bot.log 定位卡住的后台任务（如未结束的 WebSocket 处理器）",
+            )
+            bot.terminate()
+            time.sleep(1)
+        bot_stopped = True
         return checker.summary()
     except Exception as exc:  # pragma: no cover - 自检自身异常
         import traceback
@@ -1720,16 +1741,18 @@ def main() -> int:
         # mock / bot 清理放在 Qt 析构（context.shutdown / processEvents）之前：
         # Qt 清理阶段偶发 abort（0xC0000409）时，后面的语句不会执行，
         # mock 子进程会留成孤儿（Windows 下 MockProcess 的 Job Object 是第二道保险）
-        try:
-            client.post("/api/shutdown", timeout=10)
-        except Exception:
-            pass
-        deadline = time.time() + 20
-        while time.time() < deadline and bot.poll() is None:
-            time.sleep(0.3)
-        if bot.poll() is None:
-            bot.terminate()
-            time.sleep(1)
+        if not bot_stopped:
+            try:
+                client.post("/api/shutdown", timeout=10)
+            except Exception:
+                pass
+            deadline = time.time() + 15
+            while time.time() < deadline and bot.poll() is None:
+                time.sleep(0.3)
+            if bot.poll() is None:
+                print("  [警告] Bot 进程收到 /api/shutdown 后 15 秒仍未退出，已强制结束（查 bot.log 定位卡住的后台任务）")
+                bot.terminate()
+                time.sleep(1)
         try:
             client.close()
         except Exception:

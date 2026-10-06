@@ -226,7 +226,14 @@
   安装包自检成品阶段剥离 `BAIAI_PAYLOAD` 环境变量（此前泄漏会让成品安装误装
   cmd.exe 冒充体、主程序自卸载形同虚设）并加主程序体积下限断言 /
   自检 mock 子进程挂 Windows Job Object 防孤儿（Qt teardown abort 时自动回收）
-  等新断言与防回归措施，
+  等防回归措施，
+  **修复「自检 GUI 段全过、进程却以退出码 1 结束」（V0.2 发布后 CI 首跑即红）**：
+  双层根因——bot 侧 `/ws/events` 处理器只发不收，uvicorn 关闭时后台任务永久阻塞，
+  bot 卡在「Waiting for background tasks to complete」（现并发监视对端断开，
+  另加 `timeout_graceful_shutdown=8` 兜底）；GUI 侧 EventStream 在 bot 慢退期间
+  处于重连退避，`stop()` 只等 3 秒就销毁 QThread 对象，Qt failfast（0xC0000409）
+  无声杀进程（现 `stop()` 等到线程真正结束、退避上限 5 秒）。自检新增断言：
+  bot 在 `/api/shutdown` 后 15 秒内必须退出，否则该项直接 FAIL，不再无声强杀，
   开发环境合计 681 项 / 打包后 719 项，全部通过。
 
 ## V0.1（内测）

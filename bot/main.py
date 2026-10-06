@@ -144,11 +144,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         # log_config=None：不使用 uvicorn 自带的日志配置，日志统一走本项目的
         # 文件/控制台处理器（否则 bot.log 里会丢掉 uvicorn 的启动与报错信息）
+        # timeout_graceful_shutdown：关闭时若仍有后台任务未结束（如 WS 处理器泄漏），
+        # 限时强制取消，避免进程卡死在「Waiting for background tasks to complete」
         uvicorn.run(
             application,
             host=runtime.host,
             port=runtime.port,
             log_config=None,
+            timeout_graceful_shutdown=8,
             access_log=bool(config.get("logging.access_log", False)),
         )
     except KeyboardInterrupt:  # pragma: no cover
