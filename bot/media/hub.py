@@ -180,12 +180,13 @@ class MediaHub:
         return result
 
     async def _process_voice_attachment(self, result: "MediaInbound", att: Dict[str, Any]) -> None:
-        """语音附件转文字：直接用 QQ 官方平台随消息事件推送的参考转写。
+        """语音附件：QQ 平台参考转写（零配置可听）+ 下载音频落盘（V0.2.2）。
 
         官方平台（bot.q.qq.com）的语音消息附件自带 ``asr_refer_text``
         （腾讯识别引擎的转写文本），随事件一起推送、免费、无需任何配置。
-        附件里的 ``url``（silk）/ ``voice_wav_url``（wav）仅作下载链接保留，
-        本程序不再下载音频。
+        V0.2.2 起同时把音频下载进 inbox（优先 ``voice_wav_url`` 的 wav，
+        回退 ``url`` 的 silk），让「对话记录」能保存并回放用户发来的语音。
+        下载失败不影响转写使用（只少存档）。
         """
         refer = str(att.get("asr_refer_text") or "").strip()
         if refer:
@@ -193,6 +194,19 @@ class MediaHub:
             log.info("语音转文字成功（QQ 平台参考转写，%d 字）", len(refer))
         else:
             result.errors.append("收到语音，但平台这次没提供参考转写，角色暂时没听清")
+
+        wav_url = str(att.get("voice_wav_url") or "").strip()
+        silk_url = str(att.get("url") or "").strip()
+        url, preferred_ext = (wav_url, "wav") if wav_url else (silk_url, "silk")
+        if not url:
+            return
+        try:
+            data = await self._download(url)
+            if data:
+                path = store.save_inbox(data, preferred_ext)
+                result.voice_paths.append(str(path))
+        except Exception as exc:
+            result.errors.append("语音音频存档失败（转写不受影响）：%s" % exc)
 
     @staticmethod
     def _classify(ext: str, content_type: str) -> str:

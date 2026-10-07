@@ -164,6 +164,173 @@ async def recent_messages(db: Database, character_id: str, limit: int = 20) -> L
     return rows
 
 
+async def messages_in_window(
+    db: Database,
+    character_id: str,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 2000,
+) -> List[Dict[str, Any]]:
+    """按时间窗口取消息（V0.2.2 上下文分级：最近 N 天的原文）。
+
+    ``since`` / ``until`` 是 ISO 时间字符串（含当天），按字典序比较即可。
+    返回升序（旧 → 新）。
+    """
+    where = ["character_id = ?"]
+    params: List[Any] = [character_id]
+    if since:
+        where.append("created_at >= ?")
+        params.append(since)
+    if until:
+        where.append("created_at <= ?")
+        params.append(until)
+    # 取窗口内**最新**的 limit 条（DESC 取再反序）：旧实现按 ASC 取，
+    # 窗口内消息超过 limit 时刚入库的最新消息会被截掉，导致"回复看不到当前消息"
+    rows = await db.fetchall(
+        "SELECT * FROM messages WHERE %s ORDER BY id DESC LIMIT ?" % " AND ".join(where),
+        tuple(params + [max(1, int(limit))]),
+    )
+    rows.reverse()
+    return list(rows)
+
+
+async def search_messages(
+    db: Database,
+    character_id: str,
+    limit: int = 300,
+    search: str = "",
+    month: str = "",
+    day: str = "",
+) -> List[Dict[str, Any]]:
+    """按 月 / 天 / 关键词 检索对话记录（V0.2.2：按月按天查看）。
+
+    ``month`` 形如 ``2026-10``，``day`` 形如 ``2026-10-06``；均按
+    ``substr(created_at, 1, 7 / 10)`` 精确匹配。返回升序，但只保留**最新**
+    的 limit 条（与 recent_messages 一致，避免旧消息把新记录挤出去）。
+    """
+    where = ["character_id = ?"]
+    params: List[Any] = [character_id]
+    if month:
+        where.append("substr(created_at, 1, 7) = ?")
+        params.append(str(month)[:7])
+    if day:
+        where.append("substr(created_at, 1, 10) = ?")
+        params.append(str(day)[:10])
+    keyword = str(search or "").strip()
+    if keyword:
+        where.append("content LIKE ?")
+        params.append("%" + keyword.replace("%", "\\%").replace("_", "\\_") + "%")
+    rows = await db.fetchall(
+        "SELECT * FROM messages WHERE %s ORDER BY id DESC LIMIT ?" % " AND ".join(where),
+        tuple(params + [max(1, int(limit))]),
+    )
+    rows.reverse()
+    return list(rows)
+
+
+async def message_months(db: Database, character_id: str) -> List[str]:
+    """某角色有消息的月份列表（``2026-10``，新 → 旧），供界面下拉框。"""
+    rows = await db.fetchall(
+        "SELECT DISTINCT substr(created_at, 1, 7) AS m FROM messages "
+        "WHERE character_id = ? AND created_at != '' ORDER BY m DESC",
+        (character_id,),
+    )
+    return [str(row["m"]) for row in rows if row.get("m")]
+
+
+async def message_days(db: Database, character_id: str, month: str = "") -> List[str]:
+    """某角色在某月份（不限则全部）有消息的日期列表（新 → 旧）。"""
+    if month:
+        rows = await db.fetchall(
+            "SELECT DISTINCT substr(created_at, 1, 10) AS d FROM messages "
+            "WHERE character_id = ? AND substr(created_at, 1, 7) = ? AND created_at != '' "
+            "ORDER BY d DESC",
+            (character_id, str(month)[:7]),
+        )
+    else:
+        rows = await db.fetchall(
+            "SELECT DISTINCT substr(created_at, 1, 10) AS d FROM messages "
+            "WHERE character_id = ? AND created_at != '' ORDER BY d DESC",
+            (character_id,),
+        )
+    return [str(row["d"]) for row in rows if row.get("d")]
+
+
+# ===================================================== 对话压缩摘要（V0.2.2） ===
+async def last_summary_covered(db: Database, character_id: str) -> int:
+    """该角色已有摘要覆盖到的最大 messages.id（0 = 还没有摘要）。"""
+    value = await db.scalar(
+        "SELECT MAX(covered_to) AS v FROM memory_summaries WHERE character_id = ?",
+        (character_id,),
+        default=0,
+    )
+    return int(value or 0)
+
+
+async def unsummarized_old_messages(
+    db: Database,
+    character_id: str,
+    before: str,
+    covered_to: int,
+    limit: int = 60,
+) -> List[Dict[str, Any]]:
+    """取「早于 ``before`` 且还没被摘要覆盖」的消息（升序，最多 ``limit`` 条），
+    供压缩器分批处理。"""
+    rows = await db.fetchall(
+        "SELECT * FROM messages WHERE character_id = ? AND id > ? AND created_at != '' "
+        "AND created_at < ? ORDER BY id ASC LIMIT ?",
+        (character_id, int(covered_to), before, max(1, int(limit))),
+    )
+    return list(rows)
+
+
+async def insert_summary(
+    db: Database, character_id: str, covered_to: int, content: str
+) -> int:
+    return await db.insert(
+        "memory_summaries",
+        {
+            "character_id": character_id,
+            "covered_to": int(covered_to),
+            "content": content,
+            "created_at": iso_now(),
+        },
+    )
+
+
+async def mark_messages_summarized(db: Database, message_ids: List[int]) -> int:
+    if not message_ids:
+        return 0
+    marks = ",".join("?" for _ in message_ids)
+    cursor = await db.execute(
+        "UPDATE messages SET summarized = 1 WHERE id IN (%s)" % marks, tuple(message_ids)
+    )
+    return int(cursor.rowcount or 0)
+
+
+async def recent_summaries(db: Database, character_id: str, limit: int = 8) -> List[Dict[str, Any]]:
+    """该角色最近的若干条摘要（旧 → 新），供系统提示词。"""
+    rows = await db.fetchall(
+        "SELECT * FROM memory_summaries WHERE character_id = ? ORDER BY id DESC LIMIT ?",
+        (character_id, max(1, int(limit))),
+    )
+    rows.reverse()
+    return rows
+
+
+async def update_last_message_media(
+    db: Database, character_id: str, kind: str, media_path: str
+) -> int:
+    """把该角色最后一条 assistant 消息标记为带媒体（V0.2.2：记录图片/语音）。"""
+    cursor = await db.execute(
+        "UPDATE messages SET kind = ?, media_path = ? WHERE id = ("
+        " SELECT MAX(id) FROM messages WHERE character_id = ? AND role = 'assistant'"
+        ")",
+        (kind or "text", media_path or "", character_id),
+    )
+    return int(cursor.rowcount or 0)
+
+
 async def list_conversations(db: Database) -> List[Dict[str, Any]]:
     """按角色汇总会话，用于 GUI 的会话列表。"""
     return await db.fetchall(
@@ -291,22 +458,25 @@ async def log_proactive(
     )
 
 
-async def proactive_count_today(db: Database, character_id: Optional[str] = None) -> int:
+async def proactive_count_today(
+    db: Database, character_id: Optional[str] = None, bot_id: Optional[str] = None
+) -> int:
+    """今日已发送的主动消息数。``character_id`` / ``bot_id`` 可叠加过滤
+    （V0.2.2：多机器人各自独立计数，传入 bot_id 时只数该机器人的）。"""
+    where = ["status = 'sent'"]
+    params: List[Any] = []
     if character_id:
-        return int(
-            await db.scalar(
-                "SELECT COUNT(*) AS n FROM proactive_log "
-                "WHERE status = 'sent' AND character_id = ? AND substr(sent_at, 1, 10) = ?",
-                (character_id, today_str()),
-                default=0,
-            )
-            or 0
-        )
+        where.append("character_id = ?")
+        params.append(character_id)
+    if bot_id:
+        where.append("bot_id = ?")
+        params.append(bot_id)
+    where.append("substr(sent_at, 1, 10) = ?")
+    params.append(today_str())
     return int(
         await db.scalar(
-            "SELECT COUNT(*) AS n FROM proactive_log "
-            "WHERE status = 'sent' AND substr(sent_at, 1, 10) = ?",
-            (today_str(),),
+            "SELECT COUNT(*) AS n FROM proactive_log WHERE %s" % " AND ".join(where),
+            tuple(params),
             default=0,
         )
         or 0
@@ -322,15 +492,21 @@ async def proactive_counts_today_by_character(db: Database) -> Dict[str, int]:
     return {str(row["character_id"]): int(row["n"]) for row in rows}
 
 
-async def last_proactive(db: Database, character_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def last_proactive(
+    db: Database, character_id: Optional[str] = None, bot_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """最近一条已发送的主动消息。可叠加 character_id / bot_id 过滤（V0.2.2）。"""
+    where = ["status = 'sent'"]
+    params: List[Any] = []
     if character_id:
-        return await db.fetchone(
-            "SELECT * FROM proactive_log WHERE character_id = ? AND status = 'sent' "
-            "ORDER BY id DESC LIMIT 1",
-            (character_id,),
-        )
+        where.append("character_id = ?")
+        params.append(character_id)
+    if bot_id:
+        where.append("bot_id = ?")
+        params.append(bot_id)
     return await db.fetchone(
-        "SELECT * FROM proactive_log WHERE status = 'sent' ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM proactive_log WHERE %s ORDER BY id DESC LIMIT 1" % " AND ".join(where),
+        tuple(params),
     )
 
 

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from common.logging_setup import get_logger
 from common.utils import truncate
 
-from ..database import Database
+from ..database import Database, crud
 from ..memory.long_term import LongTermMemory
 from ..memory.short_term import ShortTermMemory
 from .llm_client import LLMClient, LLMError
@@ -124,6 +124,36 @@ class AIEngine:
             return []
         return await self.long.retrieve(character_id, query=query)
 
+    # ------------------------------------------------------------ 上下文分级（V0.2.2）
+    def _context_window_since(self) -> str:
+        """上下文窗口边界：最近 N 天内的消息才以原文进上下文。"""
+        import datetime as dt
+
+        try:
+            days = max(1, int(self.config.get("memory.context_window_days", 7) or 7))
+        except (TypeError, ValueError):
+            days = 7
+        return (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    async def _context(self, character_id: str, limit: int) -> tuple:
+        """取上下文：窗口内原文（按 limit 截最近）+ 更早消息的压缩摘要。
+
+        窗口外的原文不发给模型；超过 summary_window_days 的消息只归档在库里，
+        由 MemorySummarizer 压成摘要（进提示词代替原文）。
+        """
+        limit = max(2, int(limit or 20))
+        rows = await crud.messages_in_window(
+            self.db, character_id, since=self._context_window_since(), limit=limit * 2
+        )
+        if len(rows) > limit:
+            rows = rows[-limit:]
+        try:
+            summary_limit = int(self.config.get("memory.summary_prompt_max", 8) or 8)
+        except (TypeError, ValueError):
+            summary_limit = 8
+        summaries = await crud.recent_summaries(self.db, character_id, limit=summary_limit)
+        return rows, summaries
+
     async def history_for(self, character_id: str, limit: int) -> List[Dict[str, Any]]:
         return await self.short.history(character_id, limit=limit)
 
@@ -135,16 +165,19 @@ class AIEngine:
         chat_hint: str = "",
         store: bool = True,
         image_paths: Optional[List[str]] = None,
+        voice_path: str = "",
     ) -> Optional[str]:
         """生成回复。失败返回 None（此时用户消息依然已入库，保留上下文）。
 
         ``image_paths`` 非空时走视觉线路（vision 槽位）看图回复；
         视觉未配置则把“收到图片但看不到”写进提示，让角色自然回应。
+        ``voice_path`` 是用户语音落盘路径（V0.2.2：记录里保留语音）。
         """
         character_id = str(character.get("id") or "")
         user_text = (user_text or "").strip()
         image_paths = [str(p) for p in (image_paths or []) if str(p)]
-        if not character_id or not (user_text or image_paths):
+        voice_path = str(voice_path or "").strip()
+        if not character_id or not (user_text or image_paths or voice_path):
             return None
 
         # 有图无字时，给视觉模型一个明确的看图任务
@@ -152,8 +185,15 @@ class AIEngine:
             user_text = "（用户发来了 %d 张图片，请看图内容）" % len(image_paths)
         elif image_paths and user_text in ("", "（对方发来了一条消息）"):
             user_text = "（用户发来了 %d 张图片，请看图内容）" % len(image_paths)
-        # 短期记忆里标记“这条带了图片”，避免后续上下文里信息丢失
-        stored_text = user_text if not image_paths else "【图片】%s" % user_text
+        # 短期记忆里标记“这条带了图片/语音”，对话记录里保留媒体（V0.2.2）
+        if image_paths:
+            stored_text = "【图片】%s" % user_text
+            stored_kind, stored_media = "image", image_paths[0]
+        elif voice_path:
+            stored_text = "【语音】%s" % user_text
+            stored_kind, stored_media = "voice", voice_path
+        else:
+            stored_text, stored_kind, stored_media = user_text, "text", ""
 
         try:
             if store:
@@ -161,15 +201,16 @@ class AIEngine:
                     character_id,
                     "user",
                     stored_text,
-                    kind="image" if image_paths else "text",
-                    media_path=image_paths[0] if image_paths else "",
+                    kind=stored_kind,
+                    media_path=stored_media,
                 )
-            history = await self.short.history(character_id)
+            history, summaries = await self._context(character_id, self.short.max_messages)
             memories = await self.memories_for(character_id, query=user_text)
             hint = chat_hint
             if image_paths and self.vision_configured():
                 messages = build_reply_messages(
-                    character, self.config, history, memories, chat_hint=hint
+                    character, self.config, history, memories,
+                    chat_hint=hint, summaries=summaries,
                 )
                 messages = self._with_image(messages, user_text, image_paths)
                 log.info("视觉线路 [%s] 开始看图（%d 张）", self._vision_client().model, len(image_paths))
@@ -182,7 +223,8 @@ class AIEngine:
                         "可以自然地表现出好奇，并请对方描述一下。" % len(image_paths)
                     )
                 messages = build_reply_messages(
-                    character, self.config, history, memories, chat_hint=hint
+                    character, self.config, history, memories,
+                    chat_hint=hint, summaries=summaries,
                 )
                 content = await self.llm.chat(messages)
             content = content.strip()
@@ -214,10 +256,10 @@ class AIEngine:
         context_messages = int(self.config.get("proactive.context_messages", 8) or 8)
 
         try:
-            history = await self.short.history(character_id, limit=context_messages)
+            history, summaries = await self._context(character_id, context_messages)
             memories = await self.memories_for(character_id)
             messages = build_proactive_messages(
-                character, self.config, history, memories, interval_hint=hint
+                character, self.config, history, memories, interval_hint=hint, summaries=summaries
             )
             content = (await self.llm.chat(messages)).strip()
             if not content:

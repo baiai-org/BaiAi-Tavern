@@ -12,9 +12,9 @@
 | 这是什么 | Windows 桌面应用：让多个 AI 角色通过 **QQ 官方机器人** 主动给你发消息、并回复你的消息 |
 | 运行形态 | 两个进程：**GUI 进程**（PySide6，含托盘）+ **Bot 进程**（FastAPI + uvicorn + APScheduler），通过本机 HTTP/WS 通信 |
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
-| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，共 **681 项**（开发环境；打包后 **719 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
+| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，开发环境 **685 项**（打包产物齐备时 **692 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
 | 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
-| 当前版本 | V0.2.1（= V0.2 + 退出路径修复），`main` / tag `v0.2.1` / Release `v0.2.1` 均已发布；V0.2 用户启动时自动提醒更新 |
+| 当前版本 | V0.2.2 开发中（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理 + 按月/按天检索 + 语音存档；**尚未发布**，`main` / tag / Release 仍是 V0.2.1 |
 | 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
 
 ---
@@ -73,6 +73,12 @@
   `runtime.media` 持有 `MediaHub`；官方通道 `client.py` 增加富媒体上传（`msg_type=7` + `file_info`）与分片上传。
   数据库升到 `SCHEMA_VERSION=6`（`characters.tts_voice` + 角色级音色调节 `tts_rate/tts_pitch/tts_volume/tts_speed`、
   `messages.kind` / `messages.media_path`，旧库自动 `ALTER`）。
+  **V0.2.2**：数据库升到 `SCHEMA_VERSION=7`（`messages.summarized` + `memory_summaries` 表）；
+  新增 `bot/memory/summarizer.py`（后台压缩器：7 天前对话分批压缩成摘要，每 60 秒一轮）、
+  `app/parallel_download.py`（多线程分段下载，最多 16 段）；主动消息调度改为**每机器人独立**
+  任务（`bot/scheduler/proactive.py` 的 `_install_jobs` 按 `enabled_bots()` 展开）；
+  对话页（`app/pages/conversations.py`）加月/日筛选 + 关键词搜索 + 图片查看/语音播放
+  （QMediaPlayer，silk 走系统播放器）。
 - **降级不变量**：任何媒体能力失败（未配置线路 / 调用出错 / 上传失败）都必须优雅退回纯文字，绝不把聊天打断；
   `send_outgoing` 里若文字 + 媒体都没发出去，会把正文再按纯文字发一遍保底。
 - 接入方式**只有 QQ 官方机器人**（AppID / AppSecret）。历史上支持过 NapCat / OneBot，**已完整移除**：相关代码、界面、下载器、安装包内容都删了，老配置里的遗留键会在 `ConfigManager.load()` 时自动清理并写出 `config.yaml.bak`。
@@ -89,8 +95,8 @@
 | 仓库 | <https://github.com/baiai-org/BaiAi-Tavern>（public，默认分支 `main`） |
 | 协议 | Apache-2.0（`LICENSE`，第三方清单见 `NOTICE`） |
 | CI | `.github/workflows/ci.yml`（Windows runner：pyflakes + 6 套自检；`workflow_dispatch` 时额外打包并跑 frozen 自检） |
-| 发布 | `main` = V0.2.1（tag `v0.2.1`）；线上 Releases：`v0.2.1`（当前）/ `v0.2` / `v0.1`（历史），均含安装包 + `SHA256SUMS.txt` |
-| 产物 | `dist\BaiAi-Tavern V0.2.1.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
+| 发布 | `main` = V0.2.1（tag `v0.2.1`）；线上 Releases：`v0.2.1`（当前）/ `v0.2` / `v0.1`（历史），均含安装包 + `SHA256SUMS.txt`。V0.2.2 待发布（分支 `v0.2.2`） |
+| 产物 | `dist\BaiAi-Tavern V0.2.2.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
 | 图标 | 全部由 `scripts/make_icons.py` + `app/uikit.py` 绘制，`resources/icons/*.ico` 是产物 |
 
 **发新版本流程**
@@ -269,7 +275,7 @@ scripts\start.bat
 
 :: 打包
 scripts\build.bat            :: dist\BaiAi-Tavern.exe + dist\bot.exe（带版本资源）
-scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.1.exe（组装 payload → 单文件安装包）
+scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload → 单文件安装包）
 ```
 
 > ⚠️ PATH 上的 `python` 可能是 Windows Store 版 3.9，**永远用 `.venv\Scripts\python.exe`**。
@@ -308,26 +314,30 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.1.exe（组装 payload �
 
 ---
 
-## 9. 自检体系（8 套，开发环境 681 项 / 打包后 719 项）
+## 9. 自检体系（8 套，开发环境 685 项 / 打包产物齐备 692 项）
 
 | 命令 | 项数 | 覆盖 |
 |---|---|---|
 | `python -m tests.smoke_test` | 267 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / TTS 风格参数与试听文案池 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
-| `python -m tests.official_smoke` | 73 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且不下载音频）** |
+| `python -m tests.official_smoke` | 73 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且音频被下载存档（V0.2.2：优先 voice_wav_url））** |
 | `python -m tests.multibot_smoke` | 38 | 两个官方机器人 + 两个角色互不串台 |
 | `python -m tests.onboarding_smoke` | 88 | 6 步配置引导（含步骤标题 `EXPECTED_HEADS`；含**汇总页隐藏「取消引导」/ LLM 密钥留空也能「完成」不 KeyError**） |
 | `python -m tests.gui_smoke` | 149 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
 | `python -m tests.scheduler_live` | 14 | 定时触发"真实到点"慢速自检 |
 | `python -m tests.frozen_smoke` | 0 / 34 | **打包产物**（无产物时自动跳过 0 项；产物齐备时 34 项，`--force` 强制） |
-| `python -m tests.installer_smoke` | 52 / 59 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 + **更新系统（版本比较/附件挑选/SHA256/下载进度/启动限流/静默拉起，本地 HTTP 模拟 GitHub，无外网依赖）**（无产物 52 项；有产物 59 项） |
+| `python -m tests.installer_smoke` | 56 / 63 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 + **更新系统（版本比较/附件挑选/SHA256/下载进度/启动限流/静默拉起，本地 HTTP 模拟 GitHub，无外网依赖）** + **V0.2.2 多线程分段下载（大文件 Range 分段与完整覆盖、plan_ranges 切分）**（无产物 56 项；有产物 63 项） |
 
 - `tests/mock_servers.py`：mock LLM + mock QQ 官方平台（`/app/getAppAccessToken`、`/users/@me`、`/gateway`、
   `/v2/users/{openid}/messages`、`/v2/groups/{group_openid}/messages`、WS `/official-ws`、控制面 `/__control/*`）；
   **V0.2 新增富媒体 mock**：`POST /v2/users/{openid}/files`（`file_info` 富媒体上传）、`/v1/audio/speech`（TTS 返回 MP3）、
   `/api/v1/services/aigc/multimodal-generation/generation` 与 `/api/v1/services/audio/tts/SpeechSynthesizer`
   （百炼原生 TTS mock，JSON 返回 `output.audio`，model 以 `urltest` 开头走 audio.url 分支）、
-  `/v1/images/generations`（生图返回 b64）、`/media/test.png` / `/media/test.silk`（仿真语音附件；产品代码不下载，
-  仅事件里带真实 URL）；mock 记录 `last_llm_user_text`（最近一次 LLM 请求的最后一条 user 消息文本），
+  `/v1/images/generations`（生图返回 b64）、`/media/test.png` / `/media/test.silk`（仿真语音附件；
+  V0.2.2 起产品代码会**下载音频存档**——优先 `voice_wav_url`（`/media/wav_variant.bin`），
+  没有时存 silk 原件；mock 记录 `media_files_served` / `wav_variant_served` 供断言）、
+  `plan_ranges` 分段下载断言用 `/media/large.bin`（4MB 随机数据，mock 的 Range GET 会 206
+  且记录每个 `range_requests`）；mock 记录 `last_llm_user_text`（最近一次 LLM 请求的最后一条
+  user 消息文本），
   用于断言"平台参考转写进了模型上下文"。
   控制面 `emit_c2c` / `emit_group` 支持 `attachments` 列表（含 `asr_refer_text`），`reset()` 支持 `vision_text`。
   辅助：`MockProcess`、`reset()`、`emit_c2c()`、`emit_group()`、`official_sent()`、
@@ -758,6 +768,35 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.1.exe（组装 payload �
       failfast 前 Qt 会打 `QThread: Destroyed while ...`；CI 日志用 API 拉
       （`GET /actions/jobs/{id}/logs` 302 重定向时要**去掉 Authorization 头**，
       否则 blob 存储 403）。
+41. **APScheduler 任务「到点静默不触发」（V0.2.2 多机器人重构引入，scheduler_live 才抓出来）**：
+    - **症状**：任务注册成功、`next_run_time` 正确、调度器 running，到点后 `next_run`
+      直接跳到**下一个周期**（看起来像"执行完了"），但任务函数一行日志都没打。
+    - **根因**：给任务带参数时用了 `(lambda bot_id: self._job_x(bot_id), {"bot_id": ...})`
+      这种"同步 lambda 包装协程"的写法。APScheduler 用
+      `iscoroutinefunction_partial(job.func)` 判定：lambda 是**普通同步函数** → 丢进
+      线程池执行 → lambda 调用 async 方法返回的**协程对象没人 await**，被 GC 静默丢弃
+      （`run_job` 只看到 lambda 正常返回）。next_run 照常推进，所以状态接口看起来一切正常。
+    - **修法**：直接传**协程函数本体**（bound method 会被正确识别）+ 单独的
+      `kwargs` 字典——`ProactiveScheduler._add` 约定 `func` 可以是
+      `(协程函数, kwargs 字典)` 元组，但元组里的函数本身必须是协程函数（已写进 docstring）。
+    - **排查工具**：`scheduler_live` 等待期间轮询 `/api/proactive/status` 打印各任务
+      `next_run`——next_run 提前跳到下一周期 = 任务"执行"过但协程没跑。
+42. **`ORDER BY id ASC LIMIT n` 会截掉最新消息（V0.2.2 上下文窗口查询引入）**：
+    - **症状**：对话历史一长（> 窗口 limit），模型"看不到当前这条消息"——刚 append
+      的 user 消息不在传给 LLM 的上下文里，但数据库里明明有。
+    - **根因**：`crud.messages_in_window`（以及 `search_messages`）按 `id ASC` 取 limit 条，
+      窗口内消息超过 limit 时取到的是**最旧**的 n 条，最新的被挤出。
+    - **修法**：一律 `ORDER BY id DESC LIMIT n` 取最新再 `rows.reverse()` 反成升序
+      （`recent_messages` / `recent_summaries` 本来就是对的）。**凡是"取最近 N 条"的
+      查询都要先 DESC 再反序，禁止 ASC + LIMIT。**
+43. **`Accept-Ranges` 头判定写成 `"bytes=" in value`（V0.2.2 多线程下载引入）**：
+      HTTP 标准里 `Accept-Ranges` 的取值就是 `bytes`（**不带等号**，等号是 Range
+      **请求头**里的格式），写成 `"bytes="` 永远判 False → 所有下载悄悄退化成整文件
+      单连接。判定用 `"bytes" in value.lower()`。installer_smoke 的大文件分段断言
+      （>=2 个 Range 请求且覆盖完整）就是防这个的。
+44. **定时触发 jitter 写错单位（900 秒 ≠ 90 秒）**：CronTrigger 的 `jitter` 单位是
+      秒；多机器人重构时把 90 写成 900（迟到最多 15 分钟），`scheduler_live` 的
+      210 秒等待窗口抓不到。改配置数值前先确认单位与测试等待窗口的匹配。
 
 ---
 
@@ -775,6 +814,14 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.1.exe（组装 payload �
 
 **待办 / 可做**
 
+- [ ] **V0.2.2 真机验证 + 发布**（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理
+  已在 mock 全链验证（692 项自检全绿），待用户真实 QQ 验证 → 打包 →
+  `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`（安装包 + SHA256SUMS.txt）。
+  真机重点看：**多机器人不再同时发同样的主动消息**、**群消息 @/不 @ 都按开关响应**、
+  **机器人 2 的 AppID/Secret 保存后仍在**、**更新下载速度（多线程）**、**更新后自动拉起新版**、
+  **对话页按月/按天筛选与语音回放**、**15 天以上老对话不进上下文但可查**（压缩摘要生效）。
+  历史坑：坑 41（APScheduler 协程静默丢失）/ 坑 42（ASC+LIMIT 截断最新消息）/
+  坑 43（Accept-Ranges 判定）/ 坑 44（jitter 单位）。
 - [x] **V0.2 真机验证 + 发布**（已完成）：用户真实 QQ 验证通过 → 打包 → `main` 合入 V0.2、tag `v0.2`、GitHub Release `v0.2`（安装包 + SHA256SUMS.txt）已上传，自动更新链路生效。历史坑见坑 40（CI 首跑 gui 自检 exit code 1 的双层根因与修法）。
   「听语音」零配置（官方平台参考转写），真机重点确认**有参考转写时角色能听懂**（已验证过一次：
   11:05 语音消息日志里出现参考转写并正常回复）；「[IMG] 发图」用 Gemini 时选**原生接口预设**

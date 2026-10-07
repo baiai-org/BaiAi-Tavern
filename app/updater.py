@@ -231,48 +231,25 @@ def download(url: str, dest_dir: Optional[Path] = None, progress: Optional[Progr
              timeout: float = 60.0) -> Path:
     """下载到临时目录（先 .part 再改名，断掉不留下半成品）。
 
+    V0.2.2 起走 :mod:`app.parallel_download`：多线程分段 Range 并发下载
+    （GitHub Release 限速时单连接很慢，多线程拉满速度才正常）；
+    服务器不支持分段时自动回退整文件下载。
+
     进度回调可能从工作线程里调用：回调自身要线程安全（界面侧用 Qt 信号转回主线程）。
     """
+    from .parallel_download import download_file, MAX_WORKERS
+
     dest_dir = Path(dest_dir) if dest_dir else update_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     name = _basename_from_url(url)
     dest = dest_dir / name
-    part = dest_dir / (name + ".part")
     try:
-        with httpx.stream("GET", url, follow_redirects=True, timeout=timeout) as response:
-            if response.status_code != 200:
-                raise UpdateError("下载失败：GitHub 返回 %d" % response.status_code)
-            total = None
-            length = response.headers.get("Content-Length")
-            if length and length.isdigit():
-                total = int(length)
-            received = 0
-            last_report = 0.0
-            with open(part, "wb") as handle:
-                for chunk in response.iter_bytes(chunk_size=256 * 1024):
-                    if not chunk:
-                        continue
-                    handle.write(chunk)
-                    received += len(chunk)
-                    now = time.time()
-                    if progress is not None and (now - last_report > 0.2 or received == (total or 0)):
-                        last_report = now
-                        progress(received, total)
+        download_file(url, dest, on_progress=progress, max_workers=MAX_WORKERS, timeout=timeout)
     except UpdateError:
-        _cleanup_part(part)
         raise
-    except httpx.HTTPError as exc:
-        _cleanup_part(part)
-        raise UpdateError("下载失败（%s）" % _short(exc)) from exc
     except Exception as exc:
-        _cleanup_part(part)
+        _cleanup_part(dest_dir / (name + ".part"))
         raise UpdateError("下载失败（%s）" % _short(exc)) from exc
-    try:
-        if part.exists():
-            part.replace(dest)
-    except OSError as exc:
-        _cleanup_part(part)
-        raise UpdateError("下载完成但写文件失败：%s" % exc) from exc
     return dest
 
 

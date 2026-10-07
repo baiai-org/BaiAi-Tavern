@@ -1575,17 +1575,21 @@ def phase_unit_logic(c: Checker) -> None:
             finally:
                 loop2.close()
 
-        # 1) 平台给了 asr_refer_text → 直接转写成功（零配置、零下载）
+        # 1) 平台给了 asr_refer_text → 转写成功（V0.2.2：同时把音频下载存档）
+        _hits["count"] = 0
         res = _run_hub(
             [{"url": "http://127.0.0.1:%d/x" % _vport, "content_type": "voice", "asr_refer_text": "平台参考"}]
         )
         c.check(
-            "语音转文字用 QQ 平台参考转写（asr_refer_text，零配置）",
-            res.voice_texts == ["平台参考"] and not res.voice_paths,
-            str(res.__dict__),
+            "语音转文字用 QQ 平台参考转写（asr_refer_text，零配置）且音频落盘存档（V0.2.2）",
+            res.voice_texts == ["平台参考"]
+            and len(res.voice_paths) == 1
+            and Path(res.voice_paths[0]).is_file()
+            and _hits["count"] >= 1,
+            "hits=%d %s" % (_hits["count"], str(res.__dict__)),
         )
 
-        # 2) 带 url / voice_wav_url 的语音附件 → 只用参考转写，不下载音频
+        # 2) 带 url / voice_wav_url 的语音附件 → 优先下载 wav 存档（V0.2.2）
         _hits["count"] = 0
         res = _run_hub(
             [
@@ -1598,14 +1602,17 @@ def phase_unit_logic(c: Checker) -> None:
             ]
         )
         c.check(
-            "不再下载语音音频（url / voice_wav_url 只保留不使用）",
-            res.voice_texts == ["我想你了"] and _hits["count"] == 0,
+            "语音音频下载存档：有 voice_wav_url 时存 wav（V0.2.2 对话记录保存语音）",
+            res.voice_texts == ["我想你了"]
+            and len(res.voice_paths) == 1
+            and res.voice_paths[0].endswith("wav")
+            and _hits["count"] >= 1,
             "hits=%d %s" % (_hits["count"], str(res.__dict__)),
         )
 
-        # 3) 平台没给参考转写 → 明确提示听不清（不静默失败）
+        # 3) 平台没给参考转写但音频下载失败 → 明确提示听不清（不静默失败）
         res = _run_hub(
-            [{"url": "http://127.0.0.1:%d/x" % _vport, "content_type": "voice"}]
+            [{"url": "http://127.0.0.1:1/x", "content_type": "voice"}]
         )
         c.check(
             "平台没提供参考转写时给出可读提示",

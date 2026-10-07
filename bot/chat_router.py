@@ -37,6 +37,7 @@ class IncomingMessage:
     is_group: bool = False
     group_id: str = ""                # 群 openid
     self_id: str = ""
+    mentioned: bool = True            # 群消息是否 @ 了机器人（私聊恒为 True）
     message_id: str = ""              # 被动回复要用的消息 id（官方平台必需）
     source: str = "official"          # 事件来源（官方平台）
     session_key: str = ""
@@ -151,21 +152,34 @@ async def handle_incoming(
 
     hint = ""
     if incoming.is_group:
-        hint = "【当前场景】这是 QQ 群聊，你被 @ 提到了。"
+        if incoming.mentioned:
+            hint = "【当前场景】这是 QQ 群聊，对方在群里 @ 了你，请正常回应。"
+        else:
+            hint = "【当前场景】这是 QQ 群聊，对方没有 @ 你（是普通群消息）。"
+            "群里还有其他人，回复时自然一点，别显得突兀。"
     else:
         hint = "【当前场景】这是 QQ 单聊（官方机器人通道）。"
 
     # ------------------------------------------------------------ 入站多媒体
     hub = getattr(runtime, "media", None)
     image_paths: List[str] = []
+    voice_path = ""
     if hub is not None:
         try:
             media: Optional[MediaInbound] = await hub.inbound_media(incoming)
             if media is not None:
                 image_paths = list(media.image_paths)
+                voice_path = str(media.voice_paths[0]) if media.voice_paths else ""
                 note = media.text_note()
                 if note:
                     user_text = (user_text + " " + note).strip() if user_text else note
+                log.info(
+                    "入站多媒体：images=%d voice_path=%r voice_texts=%r errors=%s",
+                    len(image_paths),
+                    bool(voice_path),
+                    media.voice_texts,
+                    media.errors,
+                )
         except Exception as exc:
             log.warning("入站多媒体处理失败（按纯文字继续）：%s", exc)
         media_hint = hub.media_hint()
@@ -174,7 +188,7 @@ async def handle_incoming(
 
     llm_text = user_text or (text or "（对方发来了一条消息）")
     content = await runtime.engine.reply(
-        character, llm_text, chat_hint=hint, image_paths=image_paths or None
+        character, llm_text, chat_hint=hint, image_paths=image_paths or None, voice_path=voice_path
     )
     degraded = False
     if not content:
@@ -197,6 +211,28 @@ async def handle_incoming(
         log.error("回复发送失败：%s", exc)
         runtime.note_error("回复发送失败：%s" % exc)
         runtime.publish({"type": "error", "scope": "send", "error": str(exc)})
+
+    # V0.2.2：回复以图片/语音发出时，把记录里那条消息标记为带媒体
+    if sent and out.has_media:
+        try:
+            if out.voice_paths:
+                await crud.update_last_message_media(
+                    runtime.db, str(character.get("id") or ""), "voice", str(out.voice_paths[0])
+                )
+            elif out.image_path:
+                await crud.update_last_message_media(
+                    runtime.db, str(character.get("id") or ""), "image", str(out.image_path)
+                )
+        except Exception as exc:  # pragma: no cover
+            log.debug("标记出站媒体记录失败：%s", exc)
+
+    # V0.2.2：回复后顺手压缩过期对话（后台跑，不阻塞事件推送）
+    try:
+        import asyncio as _asyncio
+
+        _asyncio.create_task(runtime.maybe_summarize(str(character.get("id") or "")))
+    except Exception:  # pragma: no cover
+        pass
 
     await crud.set_setting(
         runtime.db, "session:%s:last_character" % session_key, str(character.get("id") or "")

@@ -4,8 +4,8 @@
 
 * 双击运行 = 图形向导：未安装时是「安装」，已安装时显示已安装版本并提供
   「重新安装 / 卸载」；
-* 自动化安装：``BaiAi-Tavern V0.2.1.exe --silent --dir "D:\\Apps\\BaiAi-Tavern" --no-run``；
-* 自动化卸载：``BaiAi-Tavern V0.2.1.exe --silent --uninstall [--remove-data]``。
+* 自动化安装：``BaiAi-Tavern V0.2.2.exe --silent --dir "D:\\Apps\\BaiAi-Tavern" --no-run``；
+* 自动化卸载：``BaiAi-Tavern V0.2.2.exe --silent --uninstall [--remove-data]``。
 
 安装后「Windows 设置 → 应用」里的卸载项指向安装目录里的主程序
 （``BaiAi-Tavern.exe --uninstall``），所以不需要单独发布卸载 EXE。
@@ -29,20 +29,72 @@ from installer import common as ic  # noqa: E402
 
 
 def launch_after_install(install_dir: Path) -> None:
+    """装完拉起新版本（V0.2.2：失败会重试 3 次，并留日志便于排查）。"""
+    import time
+
     exe = install_dir / ic.EXE_NAME
-    try:
-        os.startfile(str(exe))  # type: ignore[attr-defined]
-    except Exception:  # pragma: no cover
+    log_lines: List[str] = []
+
+    def _note(text: str) -> None:
+        line = "[%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), text)
+        log_lines.append(line)
+        print(line, flush=True)
+
+    for attempt in range(1, 4):
         try:
-            subprocess.Popen([str(exe)], cwd=str(install_dir))
-        except Exception:
-            pass
+            if not exe.exists():
+                raise FileNotFoundError("主程序不存在：%s" % exe)
+            subprocess.Popen(
+                [str(exe)],
+                cwd=str(install_dir),
+                creationflags=0x00000008 | 0x08000000,  # DETACHED_PROCESS | CREATE_NO_WINDOW
+                close_fds=True,
+            )
+            _note("第 %d 次启动成功：%s" % (attempt, exe.name))
+            break
+        except Exception as exc:
+            _note("第 %d 次启动失败：%s" % (attempt, exc))
+            try:
+                fallback = os.startfile(str(exe))  # type: ignore[attr-defined]
+                if fallback:
+                    _note("startfile 兜底启动成功")
+                    break
+            except Exception as exc2:
+                _note("startfile 兜底也失败：%s" % exc2)
+            if attempt < 3:
+                time.sleep(1.5)
+    # 把启动日志落到安装目录，排查「装完没拉起」用
+    try:
+        with open(install_dir / "install.log", "a", encoding="utf-8") as handle:
+            handle.write("\n".join(log_lines) + "\n")
+    except Exception:
+        pass
+
+
+def _silent_log_path() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "BaiAi-Tavern" / "logs" / "silent_install.log"
 
 
 # ================================================================ 命令行模式 ==
 def run_silent_install(args: argparse.Namespace) -> int:
+    import time
+
+    log_path = _silent_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write("[install] %s 开始静默安装 → %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), args.dir or "默认目录"))
+    except Exception:
+        pass
+
     def _progress(percent: int, text: str) -> None:
-        print("[%3d%%] %s" % (percent, text), flush=True)
+        line = "[%3d%%] %s" % (percent, text)
+        print(line, flush=True)
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass
 
     result = ic.install(
         install_dir=Path(args.dir) if args.dir else None,
@@ -54,7 +106,13 @@ def run_silent_install(args: argparse.Namespace) -> int:
         reg_path=args.app_key or ic.REG_PATH,
     )
     if not result.get("ok"):
-        print("安装失败：%s" % result.get("error"))
+        message = "安装失败：%s" % result.get("error")
+        print(message)
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(message + "\n")
+        except Exception:
+            pass
         return 1
     print("安装完成：%s" % result["install_dir"])
     for item in result.get("shortcuts") or []:

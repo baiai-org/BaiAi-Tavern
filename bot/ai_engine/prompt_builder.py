@@ -64,6 +64,7 @@ def build_system_prompt(
     memories_text: str = "",
     extra_instructions: str = "",
     max_chars: int = 120,
+    summaries_text: str = "",
 ) -> str:
     name = str(character.get("name") or "角色")
     sections: List[str] = [
@@ -96,6 +97,11 @@ def build_system_prompt(
     if memories_text:
         sections.extend(["", "【你记得关于对方的事】", memories_text[:1200]])
 
+    if summaries_text:
+        # 更早的对话已压缩成摘要（V0.2.2 上下文分级管理）：
+        # 原文不再随请求发送，这里只给压缩后的内容
+        sections.extend(["", "【更早的对话（已压缩摘要）】", summaries_text])
+
     if extra_instructions:
         sections.extend(["", _clean_block(extra_instructions)])
 
@@ -109,8 +115,12 @@ def build_reply_messages(
     history_rows: Sequence[Mapping[str, Any]],
     memory_rows: Sequence[Mapping[str, Any]] = (),
     chat_hint: str = "",
+    summaries: Sequence[Mapping[str, Any]] = (),
 ) -> List[Dict[str, str]]:
-    """被动回复：历史（含最新一条用户消息）直接作为对话上下文。"""
+    """被动回复：历史（含最新一条用户消息）直接作为对话上下文。
+
+    ``summaries`` 是更早对话的压缩摘要（V0.2.2）：原文不进请求，摘要进系统提示词。
+    """
     user_name = str(config.get("qq.user_nickname", "你") or "你")
     max_chars = int(config.get("proactive.max_message_chars", 120) or 120)
     memories_text = _format_memories(memory_rows)
@@ -118,6 +128,7 @@ def build_reply_messages(
     system_prompt = build_system_prompt(
         character, user_name=user_name, memories_text=memories_text, extra_instructions=extra,
         max_chars=max(max_chars, 60),
+        summaries_text=ShortTermMemory.summaries_text(summaries),
     )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -133,6 +144,7 @@ def build_proactive_messages(
     history_rows: Sequence[Mapping[str, Any]] = (),
     memory_rows: Sequence[Mapping[str, Any]] = (),
     interval_hint: str = "",
+    summaries: Sequence[Mapping[str, Any]] = (),
 ) -> List[Dict[str, str]]:
     """主动消息：在历史之后追加一条“隐藏指令”，让角色主动开口。"""
     user_name = str(config.get("qq.user_nickname", "你") or "你")
@@ -150,6 +162,7 @@ def build_proactive_messages(
         memories_text=_format_memories(memory_rows),
         extra_instructions=extra,
         max_chars=max_chars,
+        summaries_text=ShortTermMemory.summaries_text(summaries),
     )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]

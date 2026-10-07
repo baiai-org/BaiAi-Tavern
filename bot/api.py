@@ -844,17 +844,54 @@ async def list_conversations() -> List[Dict[str, Any]]:
 
 
 @router.get("/conversations/{character_id}/messages")
-async def conversation_messages(character_id: str, limit: int = Query(200, ge=1, le=2000)) -> Dict[str, Any]:
+async def conversation_messages(
+    character_id: str,
+    limit: int = Query(300, ge=1, le=2000),
+    search: str = Query("", max_length=100),
+    month: str = Query("", max_length=7),
+    day: str = Query("", max_length=10),
+) -> Dict[str, Any]:
     from .database import crud
 
     runtime = get_runtime()
     character = await crud.get_character(runtime.db, character_id)
-    rows = await crud.recent_messages(runtime.db, character_id, limit=limit)
+    filtered = bool(search.strip() or month or day)
+    if filtered:
+        rows = await crud.search_messages(
+            runtime.db, character_id, limit=limit,
+            search=search, month=month, day=day,
+        )
+    else:
+        rows = await crud.recent_messages(runtime.db, character_id, limit=limit)
     return {
         "character_id": character_id,
         "character_name": (character or {}).get("name", ""),
         "count": len(rows),
+        "filtered": filtered,
         "messages": rows,
+    }
+
+
+@router.get("/conversations/{character_id}/months")
+async def conversation_months(character_id: str) -> Dict[str, Any]:
+    """该角色有消息的月份 / 日期列表（V0.2.2：按月按天查看对话）。"""
+    from .database import crud
+
+    runtime = get_runtime()
+    return {
+        "character_id": character_id,
+        "months": await crud.message_months(runtime.db, character_id),
+    }
+
+
+@router.get("/conversations/{character_id}/days")
+async def conversation_days(character_id: str, month: str = Query("", max_length=7)) -> Dict[str, Any]:
+    from .database import crud
+
+    runtime = get_runtime()
+    return {
+        "character_id": character_id,
+        "days": await crud.message_days(runtime.db, character_id, month=month),
     }
 
 

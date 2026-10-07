@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_STATEMENTS: List[str] = [
     # ------------------------------------------------------------ 元信息
@@ -72,6 +72,19 @@ SCHEMA_STATEMENTS: List[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_memories_character ON memories(character_id)",
+    # ------------------------------------------------ 对话压缩摘要表（V0.2.2）
+    # 超过上下文窗口的历史消息压缩成的摘要，进系统提示词代替原文；
+    # covered_to 记录该摘要覆盖到的最大 messages.id（断点续压）
+    """
+    CREATE TABLE IF NOT EXISTS memory_summaries (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id TEXT NOT NULL,
+        covered_to   INTEGER NOT NULL,
+        content      TEXT NOT NULL,
+        created_at   TEXT DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_summaries_character ON memory_summaries(character_id, id)",
     # --------------------------------------------------------- 主动消息日志
     """
     CREATE TABLE IF NOT EXISTS proactive_log (
@@ -118,6 +131,8 @@ MIGRATION_COLUMNS: List[tuple] = [
     ("characters", "tts_pitch", "TEXT DEFAULT ''"),
     ("characters", "tts_volume", "TEXT DEFAULT ''"),
     ("characters", "tts_speed", "TEXT DEFAULT ''"),
+    # V0.2.2：上下文分级管理——已被压缩进摘要的消息标记
+    ("messages", "summarized", "INTEGER DEFAULT 0"),
 ]
 
 

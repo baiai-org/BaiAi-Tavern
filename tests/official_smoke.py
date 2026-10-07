@@ -601,10 +601,10 @@ def main() -> int:
         # ------------------------------------------------- 语音理解（平台参考转写，零配置）
         client.put("/api/config", json={"media": {"voice_reply_probability": 0.0}})
         mock.reset(reply_text="我听见你刚才说的话了。")
-        _voice_served_before = int(mock.state().get("media_files_served", 0))
         mock.client.post(
             "/__control/emit_c2c",
             json={
+                "id": "mock-c2c-voice-understand",
                 "attachments": [
                     {
                         "url": mock.attachment_url("test.silk"),
@@ -627,9 +627,8 @@ def main() -> int:
             str(mock.state().get("last_llm_user_text", ""))[:200],
         )
         checker.check(
-            "语音附件不被下载（url / voice_wav_url 均不请求）",
-            int(mock.state().get("media_files_served", 0)) == _voice_served_before
-            and int(mock.state().get("wav_variant_served", 0)) == 0,
+            "语音附件被下载存档（V0.2.2：优先 voice_wav_url）",
+            int(mock.state().get("wav_variant_served", 0)) >= 1,
             str({k: mock.state().get(k) for k in ("media_files_served", "wav_variant_served")}),
         )
 

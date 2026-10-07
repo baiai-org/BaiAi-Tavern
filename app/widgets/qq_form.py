@@ -169,10 +169,12 @@ class QQConfigForm(QWidget):
 
         self.in_allowed_groups = QLineEdit(page)
         self.in_allowed_groups.setPlaceholderText("群 openid 白名单，留空表示不限")
-        add_form_row(form, "群白名单", self.in_allowed_groups, "需要先打开「响应群聊 @」")
+        add_form_row(form, "群白名单", self.in_allowed_groups, "需要先打开「响应群聊消息」；留空表示不限群")
 
-        self.chk_official_group = QCheckBox("响应群聊里对我的 @")
+        self.chk_official_group = QCheckBox("响应群聊消息（总开关：关掉后群里完全不理）")
         form.addRow(self.chk_official_group)
+        self.chk_official_group_plain = QCheckBox("也响应群里没有 @ 我的普通消息")
+        form.addRow(self.chk_official_group_plain)
 
         self.chk_markdown = QCheckBox("使用 markdown 消息（需要平台权限）")
         form.addRow(self.chk_markdown)
@@ -226,6 +228,7 @@ class QQConfigForm(QWidget):
         return {
             "official": official,
             "group_reply_enabled": self.chk_official_group.isChecked(),
+            "group_reply_without_at": self.chk_official_group_plain.isChecked(),
         }
 
     def patch(self) -> Dict[str, Any]:
@@ -248,7 +251,8 @@ class QQConfigForm(QWidget):
         self.chk_markdown.setChecked(bool(official.get("markdown", False)))
         self.spin_official_segments.setValue(int(official.get("max_reply_segments", 3) or 3))
         self.spin_official_len.setValue(int(official.get("reply_segment_max_len", 200) or 200))
-        self.chk_official_group.setChecked(bool(self._get("group_reply_enabled", False)))
+        self.chk_official_group.setChecked(bool(self._get("group_reply_enabled", True)))
+        self.chk_official_group_plain.setChecked(bool(self._get("group_reply_without_at", True)))
 
     # ============================================================== 状态
     def refresh_status(self, status: Optional[Dict[str, Any]] = None) -> None:

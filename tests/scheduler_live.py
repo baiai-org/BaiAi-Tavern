@@ -137,16 +137,39 @@ def main() -> int:
         checker.check("调度器已注册配置热重载任务", any("配置热重载" in name for name in names), str(names))
         upcoming = [job for job in jobs if job.get("next_run")]
         checker.check("定时任务给出了下次执行时间", bool(upcoming), json.dumps(upcoming, ensure_ascii=False))
+        for job in jobs:
+            print("    [job] %s next_run=%s" % (job.get("name"), job.get("next_run")))
         checker.check(
-            "定时任务的下次执行时间就是配置的那一刻",
-            any(str(job.get("name")).endswith(next_minute) for job in jobs),
+            "定时任务的下次执行时间是配置的那一刻（任务名按机器人区分，V0.2.2）",
+            any(
+                str(job.get("name")).startswith("定时主动消息 " + next_minute)
+                for job in jobs
+            ),
             "%s / %s" % (next_minute, str(names)),
         )
 
         print("  等待调度器自动发送（最多 %d 秒，全程不调用任何手动触发接口）…" % WAIT_SECONDS)
-        sent = smoke_test.wait_for(
-            lambda: len(mock.official_sent()) >= 1, timeout=WAIT_SECONDS, interval=2.0
-        )
+        import time as _time
+
+        _deadline = _time.time() + WAIT_SECONDS
+        _last_dump = 0.0
+        sent = False
+        while _time.time() < _deadline:
+            if len(mock.official_sent()) >= 1:
+                sent = True
+                break
+            if _time.time() - _last_dump > 20:
+                _last_dump = _time.time()
+                try:
+                    _st = client.get("/api/proactive/status", timeout=5).json()
+                    for _job in _st.get("jobs") or []:
+                        print(
+                            "    [poll] %s next_run=%s running=%s"
+                            % (_job.get("name"), _job.get("next_run"), _st.get("running"))
+                        )
+                except Exception:
+                    pass
+            _time.sleep(1.0)
         checker.check(
             "调度器到点后自动发送了主动消息",
             sent,

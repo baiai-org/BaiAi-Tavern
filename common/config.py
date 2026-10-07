@@ -155,7 +155,10 @@ DEFAULTS: Dict[str, Any] = {
         },
         "user_nickname": "你",
         "reply_enabled": True,
-        "group_reply_enabled": False,
+        # 群聊回复：总开关（V0.2.2 起默认开，@ 消息会回复）；
+        # 没 @ 的普通群消息由 group_reply_without_at 控制
+        "group_reply_enabled": True,
+        "group_reply_without_at": True,
     },
     "proactive": {
         "enabled": True,
@@ -183,6 +186,16 @@ DEFAULTS: Dict[str, Any] = {
         "long_term_retrieve": 5,
         "long_term_enabled": True,
         "auto_extract": True,
+        # 上下文分级管理（V0.2.2）：
+        #   最近 context_window_days 天内 → 原文进入上下文
+        #   context_window_days ~ summary_window_days 天 → 压缩成摘要后进入上下文
+        #   超过 summary_window_days 天 → 只归档存储，不再发给模型
+        "context_window_days": 7,
+        "summary_window_days": 15,
+        "summarize_enabled": True,
+        "summary_batch": 60,          # 每次压缩最多处理多少条消息
+        "summary_max_chars": 300,     # 单条摘要上限
+        "summary_prompt_max": 8,      # 进上下文的最大摘要条数
     },
     "database": {
         "path": "bot.db",
@@ -271,6 +284,18 @@ def get_by_path(data: Dict[str, Any], path: str, default: Any = None) -> Any:
     for part in str(path).split("."):
         if isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, list):
+            # 列表按数字下标取（例如 bots.0.official）：
+            # 旧实现只认 dict，bots 段（列表）里的凭据永远读不出来，
+            # 界面保存后回显为空（V0.2.2 修复）
+            try:
+                index = int(part)
+            except (TypeError, ValueError):
+                return default
+            if 0 <= index < len(current):
+                current = current[index]
+            else:
+                return default
         else:
             return default
     return current

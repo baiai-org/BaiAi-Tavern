@@ -12,7 +12,7 @@ import os
 
 ROOT = os.path.abspath(os.getcwd())
 
-# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.2.1 / 作者），由 scripts/make_version_info.py 生成
+# 版本信息（让 exe 的「属性 → 详细信息」显示名称 / V0.2.2 / 作者），由 scripts/make_version_info.py 生成
 _version_path = os.path.join(ROOT, "build", "version_info_bot.txt")
 version = _version_path if os.path.exists(_version_path) else None
 

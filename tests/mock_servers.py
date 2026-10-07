@@ -98,6 +98,10 @@ def reset(
     STATE["vision_calls"] = 0
     STATE["media_files_served"] = 0
     STATE["wav_variant_served"] = 0
+    STATE["llm_last_model"] = ""
+    STATE["llm_last_last_user"] = ""
+    STATE["llm_last_messages"] = []
+    STATE["resets"] = int(STATE.get("resets", 0)) + 1
     if reply_text is not None:
         STATE["reply_text"] = reply_text
     if proactive_text is not None:
@@ -316,6 +320,8 @@ async def official_ws(websocket: WebSocket) -> None:
                     )
             elif op == 1:  # 心跳
                 await websocket.send_json({"op": 11, "d": None})
+            else:  # 机器人上行（如 op=2 之后的业务帧）：回 ACK，防止对端缓冲写阻塞
+                await websocket.send_json({"op": 3, "s": int(payload.get("s") or 0), "t": None, "d": None})
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -416,9 +422,14 @@ async def control_state() -> Dict[str, Any]:
         "official_identify": int(STATE.get("official_identify", 0)),
         "official_resume": int(STATE.get("official_resume", 0)),
         "official_drops": int(STATE.get("official_drops", 0)),
+        "resets": int(STATE.get("resets", 0)),
         "token_calls": int(STATE.get("token_calls", 0)),
         "llm_calls": len(STATE["llm_requests"]),
+        "llm_requests": list(STATE["llm_requests"]),
         "last_llm_user_text": str(STATE.get("last_llm_user_text", "")),
+        "llm_last_model": str(STATE.get("llm_last_model", "")),
+        "llm_last_last_user": str(STATE.get("llm_last_last_user", "")),
+        "llm_last_messages": list(STATE.get("llm_last_messages") or []),
         "model_calls": int(STATE.get("model_calls", 0)),
         "reply_text": STATE["reply_text"],
         "media_uploads": list(STATE["media_uploads"]),
@@ -532,8 +543,10 @@ async def list_models() -> JSONResponse:
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+async def chat_completions(request: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
     STATE["llm_requests"].append(payload)
+    STATE["llm_last_model"] = str(payload.get("model") or "")
+    STATE["llm_last_last_user"] = ""
     reply = str(STATE["reply_text"])
     # 主动消息的提示词里带「本次任务 / 主动」，据此返回不同内容，
     # 便于自检区分「被动回复」与「主动消息」两条链路。
@@ -555,6 +568,8 @@ async def chat_completions(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
             )
         break
     STATE["last_llm_user_text"] = _last_user_text
+    STATE["llm_last_last_user"] = _last_user_text[:200]
+    STATE["llm_last_messages"] = messages
     if "主动" in system and "本次任务" in system:
         reply = str(STATE.get("proactive_text") or "这是 mock 主动消息。")
     # 多模态：请求里带 image_url 时走视觉回复（V0.2）

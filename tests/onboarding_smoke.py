@@ -598,6 +598,7 @@ def main() -> int:
                     "in_allowed_users",
                     "in_allowed_groups",
                     "chk_official_group",
+                    "chk_official_group_plain",
                     "chk_markdown",
                     "spin_official_len",
                     "spin_official_segments",
@@ -609,8 +610,9 @@ def main() -> int:
             ),
         )
         checker.check(
-            "官方控件的 values() 只给出 official + group_reply_enabled",
-            set(qq_form.values().keys()) == {"official", "group_reply_enabled"},
+            "官方控件的 values() 给出 official + 群回复两项开关（V0.2.2 拆出无 @ 开关）",
+            set(qq_form.values().keys())
+            == {"official", "group_reply_enabled", "group_reply_without_at"},
             str(sorted(qq_form.values().keys())),
         )
         checker.check(

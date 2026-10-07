@@ -78,3 +78,13 @@ class ShortTermMemory:
             speaker = "我" if str(row.get("role")) == "user" else "（你）"
             lines.append("%s：%s" % (speaker, content))
         return "\n".join(lines)
+
+    @staticmethod
+    def summaries_text(summaries: List[Dict[str, Any]], limit: int = 8, max_total: int = 1800) -> str:
+        """把更早对话的压缩摘要拼成提示词段落（V0.2.2 上下文分级，旧 → 新）。"""
+        lines: List[str] = []
+        for item in list(summaries or [])[-max(1, int(limit)):]:
+            content = str(item.get("content") or "").strip()
+            if content:
+                lines.append("- %s" % content)
+        return "\n".join(lines)[:max_total]

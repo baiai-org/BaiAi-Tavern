@@ -85,7 +85,7 @@ def check_global_limit(config: Any, today_total: int) -> Decision:
     if limit <= 0:
         return _ok()
     if int(today_total) >= limit:
-        return _deny("今日主动消息已达全局上限 %d 条" % limit)
+        return _deny("今日主动消息已达上限 %d 条（V0.2.2 起每个机器人独立计算）" % limit)
     return _ok()
 
 

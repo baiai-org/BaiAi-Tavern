@@ -25,6 +25,7 @@ from .ai_engine import AIEngine
 from .character_manager import CharacterRegistry
 from .database import Database, crud
 from .media.hub import MediaHub
+from .memory.summarizer import MemorySummarizer
 from .qq_official.messaging import MODE_OFFICIAL
 from .scheduler import ProactiveScheduler
 
@@ -43,6 +44,8 @@ class Runtime:
         self.bots: List[BotAccount] = build_bots(self, self.config)
         self.scheduler = ProactiveScheduler(self)
         self.media = MediaHub(self)
+        self.summarizer = MemorySummarizer(self)
+        self._summarize_task: Optional[asyncio.Task] = None
 
         # ---------------------------------------------------------- 控制接口
         self.host: str = str(self.config.get("api.host", "127.0.0.1") or "127.0.0.1")
@@ -156,6 +159,7 @@ class Runtime:
 
         self._loop = asyncio.get_event_loop()
         self.ready = True
+        self._start_summarizer_loop()
         log.info(
             "运行时初始化完成（%d 个机器人：%s），数据库：%s",
             len(self.bots),
@@ -170,6 +174,9 @@ class Runtime:
             self.scheduler.shutdown()
         except Exception:
             pass
+        if self._summarize_task is not None:
+            self._summarize_task.cancel()
+            self._summarize_task = None
         await self.stop_gateway()
         if self.engine is not None:
             await self.engine.close()
@@ -180,6 +187,32 @@ class Runtime:
                 pass
         await self.db.close()
         log.info("运行时已关闭")
+
+    # ========================================================= 对话压缩（V0.2.2）
+    async def maybe_summarize(self, character_id: str) -> None:
+        """回复 / 主动消息后顺手压缩一次过期消息（失败静默，下次再试）。"""
+        if self.summarizer is None or not self.summarizer.enabled():
+            return
+        try:
+            await self.summarizer.maybe_summarize(character_id, max_batches=1)
+        except Exception as exc:  # pragma: no cover - 压缩不能影响主链路
+            log.debug("对话压缩跳过（%s）：%s", character_id, exc)
+
+    def _start_summarizer_loop(self) -> None:
+        """周期任务：每 60 秒扫描一次所有角色的过期消息（兜底无聊天时的压缩）。"""
+
+        async def _loop() -> None:
+            await asyncio.sleep(60)
+            while True:
+                try:
+                    await self.summarizer.scan_all(max_batches=1)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # pragma: no cover
+                    log.debug("对话压缩周期扫描失败：%s", exc)
+                await asyncio.sleep(60)
+
+        self._summarize_task = asyncio.create_task(_loop(), name="memory-summarizer")
 
     # ============================================================== 官方网关
     async def start_gateway(self) -> bool:

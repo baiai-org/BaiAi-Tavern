@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QUrl, Qt
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -83,6 +87,26 @@ class ConversationsPage(Page):
         chat_layout = QVBoxLayout(chat_tab)
         chat_layout.setContentsMargins(10, 10, 10, 10)
         chat_layout.setSpacing(8)
+
+        # 按月 / 按天 / 关键词检索（V0.2.2：对话记录分级保存，方便翻旧账）
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        self.month_combo = QComboBox(chat_tab)
+        self.month_combo.setMinimumWidth(110)
+        self.month_combo.addItem("全部月份")
+        self.day_combo = QComboBox(chat_tab)
+        self.day_combo.setMinimumWidth(130)
+        self.day_combo.addItem("全部日期")
+        self.search_input = QLineEdit(chat_tab)
+        self.search_input.setPlaceholderText("搜索消息内容…")
+        self.search_input.returnPressed.connect(lambda: self._load_messages(search=self.search_input.text().strip()))
+        filter_row.addWidget(self.month_combo, 0)
+        filter_row.addWidget(self.day_combo, 0)
+        filter_row.addWidget(self.search_input, 1)
+        chat_layout.addLayout(filter_row)
+        self.month_combo.currentIndexChanged.connect(lambda _i: self._load_messages())
+        self.day_combo.currentIndexChanged.connect(lambda _i: self._load_messages())
+
         self.message_table = QTableWidget(0, 3, chat_tab)
         self.message_table.setHorizontalHeaderLabels(["时间", "角色", "内容"])
         self.message_table.verticalHeader().setVisible(False)
@@ -92,9 +116,26 @@ class ConversationsPage(Page):
         self.message_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.message_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         chat_layout.addWidget(self.message_table, 1)
-        self.chat_hint = hint_label("提示：对话历史会作为短期记忆进入提示词；清空后角色会“忘记”这段对话。")
+        media_row = QHBoxLayout()
+        media_row.setSpacing(8)
+        self.btn_view_media = ghost_button("查看选中消息的图片 / 播放语音")
+        self.btn_view_media.setEnabled(False)
+        self.media_status = hint_label("选中带图片 / 语音的消息后可查看（V0.2.2 起对话记录保存媒体）")
+        media_row.addWidget(self.btn_view_media)
+        media_row.addWidget(self.media_status, 1)
+        chat_layout.addLayout(media_row)
+        self.message_table.itemSelectionChanged.connect(self._on_message_selected)
+        self.btn_view_media.clicked.connect(self._view_selected_media)
+        self.chat_hint = hint_label(
+            "提示：最近 7 天的对话原文进上下文；更早的会压缩成摘要（15 天内）供角色回忆，"
+            "更久的只归档保存在这里，可用上方月份 / 日期 / 搜索查看。"
+        )
         chat_layout.addWidget(self.chat_hint)
         tabs.addTab(chat_tab, "对话记录")
+
+        # 语音播放器（懒创建，页面销毁时随 self 一起释放）
+        self._player: Optional[QMediaPlayer] = None
+        self._audio_output: Optional[QAudioOutput] = None
 
         # 长期记忆
         memory_tab = QWidget(tabs)
@@ -133,6 +174,66 @@ class ConversationsPage(Page):
 
         self.current_character_id: Optional[str] = None
         self.current_character_name: str = ""
+
+    # ========================================================== 媒体查看（V0.2.2）
+    def _selected_media_row(self) -> Optional[Dict[str, str]]:
+        model = self.message_table.selectionModel()
+        rows = model.selectedRows() if model else []
+        if not rows:
+            return None
+        row = rows[0].row()
+        time_item = self.message_table.item(row, 0)
+        if time_item is None:
+            return None
+        kind = str(time_item.data(Qt.UserRole + 1) or "text")
+        media_path = str(time_item.data(Qt.UserRole + 2) or "")
+        if kind in ("image", "voice") and media_path:
+            return {"kind": kind, "path": media_path}
+        return None
+
+    def _on_message_selected(self) -> None:
+        self.btn_view_media.setEnabled(self._selected_media_row() is not None)
+
+    def _view_selected_media(self) -> None:
+        from pathlib import Path
+
+        info = self._selected_media_row()
+        if not info:
+            return
+        path = Path(info["path"])
+        if not path.is_file():
+            self.media_status.setText("媒体文件已不在磁盘上（路径：%s）" % info["path"])
+            return
+        if info["kind"] == "image":
+            self._open_with_system(path)
+            self.media_status.setText("已打开图片：%s" % path.name)
+        else:
+            # 语音：内置播放器（媒体文件名不带点，按尾缀判断；
+            # silk 格式 Qt 播不了，交给系统程序）
+            tail = path.name.lower().rpartition("_")[-1]
+            if tail == "silk":
+                self._open_with_system(path)
+                self.media_status.setText("已用系统程序打开 silk 语音：%s" % path.name)
+                return
+            try:
+                if self._player is None:
+                    self._audio_output = QAudioOutput(self)
+                    self._player = QMediaPlayer(self)
+                    self._player.setAudioOutput(self._audio_output)
+                self._player.setSource(QUrl.fromLocalFile(str(path)))
+                self._player.play()
+                self.media_status.setText("正在播放：%s（再点一次继续播放下一条）" % path.name)
+            except Exception as exc:  # pragma: no cover
+                self.media_status.setText("播放失败：%s" % exc)
+
+    @staticmethod
+    def _open_with_system(path: Path) -> None:
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception:  # pragma: no cover
+            import os
+
+            os.startfile(str(path))  # type: ignore[attr-defined]
 
     # ============================================================== 数据加载
     def refresh(self) -> None:
@@ -176,10 +277,21 @@ class ConversationsPage(Page):
         self.current_character_id = character_id
         self.current_character_name = name_item.text()
         self.title_label.setText("%s（ID：%s）" % (self.current_character_name, character_id))
+        # 换角色：清掉上一次的筛选条件
+        self.month_combo.blockSignals(True)
+        self.day_combo.blockSignals(True)
+        self.month_combo.setCurrentIndex(0)
+        self.day_combo.setCurrentIndex(0)
+        self.month_combo.blockSignals(False)
+        self.day_combo.blockSignals(False)
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+        self.btn_view_media.setEnabled(False)
         self._load_messages()
         self._load_memories()
 
-    def _load_messages(self) -> None:
+    def _load_messages(self, search: str = "") -> None:
         if not self.current_character_id:
             return
         character_id = self.current_character_id
@@ -200,13 +312,20 @@ class ConversationsPage(Page):
                     # 图片消息：入库时已带【图片】前缀，缺了则补上
                     if "【图片】" not in content_text:
                         content_text = ("【图片】" + content_text).strip()
+                elif kind == "voice":
+                    # 语音消息：保留【语音】前缀 + 转写文字（V0.2.2）
+                    if "【语音】" not in content_text:
+                        content_text = ("【语音】" + content_text).strip()
                 else:
                     # 回复里的 [IMG] 生图标记已在 QQ 里发成图片，这里不重复展示
                     lines = [ln for ln in content_text.splitlines() if not ln.strip().upper().startswith("[IMG]")]
                     cleaned = "\n".join(lines).strip()
                     if cleaned:
                         content_text = cleaned
-                self.message_table.setItem(row, 0, QTableWidgetItem(str(item.get("created_at") or "")))
+                time_item = QTableWidgetItem(str(item.get("created_at") or ""))
+                time_item.setData(Qt.UserRole + 1, str(item.get("kind") or "text"))
+                time_item.setData(Qt.UserRole + 2, str(item.get("media_path") or ""))
+                self.message_table.setItem(row, 0, time_item)
                 speaker_item = QTableWidgetItem(speaker)
                 speaker_item.setForeground(
                     Qt.GlobalColor.gray if role != "assistant" else Qt.GlobalColor.white
@@ -217,7 +336,81 @@ class ConversationsPage(Page):
             if messages:
                 self.message_table.scrollToBottom()
 
-        self.run_task(self.api().messages, character_id, 300, on_ok=_ok, label="加载对话")
+        month = self._selected_month()
+        day = self._selected_day()
+        search = search or self.search_input.text().strip()
+        self.run_task(
+            lambda: self.api().messages(character_id, limit=300, search=search, month=month, day=day),
+            on_ok=_ok,
+            key="load_messages",
+            label="加载消息",
+        )
+        if not month and not day and not search:
+            # 无筛选时顺带加载月份 / 日期下拉（切角色后也要重新拉）
+            self._load_date_filters()
+
+    def _selected_month(self) -> str:
+        index = self.month_combo.currentIndex()
+        return str(self.month_combo.itemData(index) or "") if index > 0 else ""
+
+    def _selected_day(self) -> str:
+        index = self.day_combo.currentIndex()
+        return str(self.day_combo.itemData(index) or "") if index > 0 else ""
+
+    def _load_date_filters(self) -> None:
+        if not self.current_character_id:
+            return
+        character_id = self.current_character_id
+
+        def _day_ok(result: Any) -> None:
+            if character_id != self.current_character_id:
+                return
+            days = (result or {}).get("days") or []
+            prev_day = self._selected_day()
+            self.day_combo.blockSignals(True)
+            self.day_combo.clear()
+            self.day_combo.addItem("全部日期")
+            for day in days[:60]:
+                self.day_combo.addItem(day, day)
+            if prev_day:
+                target = self.day_combo.findData(prev_day)
+                if target > 0:
+                    self.day_combo.setCurrentIndex(target)
+            else:
+                self.day_combo.setCurrentIndex(0)
+            self.day_combo.blockSignals(False)
+
+        def _month_ok(months_result: Any) -> None:
+            if character_id != self.current_character_id:
+                return
+            months = (months_result or {}).get("months") or []
+            prev_month = self._selected_month()
+            self.month_combo.blockSignals(True)
+            self.month_combo.clear()
+            self.month_combo.addItem("全部月份")
+            for month in months[:36]:
+                self.month_combo.addItem(month, month)
+            if prev_month:
+                target = self.month_combo.findData(prev_month)
+                if target > 0:
+                    self.month_combo.setCurrentIndex(target)
+                else:
+                    self.month_combo.setCurrentIndex(0)
+            self.month_combo.blockSignals(False)
+            month = self._selected_month()
+            self.run_task(
+                lambda: self.api().message_days(character_id, month=month),
+                on_ok=_day_ok,
+                key="load_message_days",
+                label="加载日期列表",
+            )
+
+        self.run_task(
+            lambda: self.api().message_months(character_id),
+            on_ok=_month_ok,
+            key="load_message_months",
+            label="加载月份列表",
+        )
 
     def _load_memories(self) -> None:
         if not self.current_character_id:

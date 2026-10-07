@@ -533,16 +533,31 @@ class InstallUpdateDialog(QDialog):
         self.lbl_progress.setText("正在静默安装…")
 
         def _work() -> bool:
+            # 1) 停 Bot（API 先退，再等进程真正结束，最多 10 秒）
             try:
                 self.ctx.api.shutdown()
             except Exception:
                 pass
-            for _ in range(12):
+            for _ in range(40):
                 if not self.ctx.bot.is_running():
                     break
-                time.sleep(0.3)
-            updater.launch_installer(installer, target, launch_after=True)
-            return True
+                time.sleep(0.25)
+            # 2) 拉起安装器（DETACHED，独立进程）
+            proc = updater.launch_installer(installer, target, launch_after=True)
+            # 3) 等安装器跑完再退出（V0.2.2 修复：旧版只等 1.5 秒就退 GUI，
+            #    和安装器关旧进程 / 拷文件互相打架，表现为"下载完程序就没了、
+            #    新版本没装起来"）
+            deadline = time.time() + 300
+            while proc.poll() is None:
+                if time.time() > deadline:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.5)
+                self.lbl_progress.setText("正在静默安装…（约 1 分钟内完成）")
+            return proc.returncode in (None, 0)
 
         self.ctx.run_task(
             _work,

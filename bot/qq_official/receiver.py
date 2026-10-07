@@ -16,28 +16,39 @@ from ..chat_router import IncomingMessage, handle_incoming, strip_mentions
 
 log = get_logger("bot.qq_official.receiver")
 
-# 私聊消息事件 / 群聊 @ 消息事件
+# 私聊消息事件 / 群聊 @ 消息事件 / 群聊普通消息事件
 C2C_MESSAGE_CREATE = "C2C_MESSAGE_CREATE"
 GROUP_AT_MESSAGE_CREATE = "GROUP_AT_MESSAGE_CREATE"
+GROUP_MESSAGE_CREATE = "GROUP_MESSAGE_CREATE"
 # 关注 / 加群等，用于把 openid 记下来
 FRIEND_ADD = "FRIEND_ADD"
 GROUP_ADD_ROBOT = "GROUP_ADD_ROBOT"
 C2C_MSG_RECEIVE = "C2C_MSG_RECEIVE"
 
+_GROUP_EVENTS = (GROUP_AT_MESSAGE_CREATE, GROUP_MESSAGE_CREATE)
+
 
 def parse_event(event: Dict[str, Any], self_id: str = "") -> Optional[IncomingMessage]:
-    """把官方事件解析成 :class:`IncomingMessage`（非消息事件返回 None）。"""
+    """把官方事件解析成 :class:`IncomingMessage`（非消息事件返回 None）。
+
+    群聊两类事件都解析：``GROUP_AT_MESSAGE_CREATE``（@ 了机器人）与
+    ``GROUP_MESSAGE_CREATE``（群里任意消息，V0.2.2 起支持响应普通群消息）。
+    """
     event_type = str(event.get("type") or "")
     data = event.get("data") or {}
     if not isinstance(data, dict):
         return None
-    if event_type not in (C2C_MESSAGE_CREATE, GROUP_AT_MESSAGE_CREATE, C2C_MSG_RECEIVE):
+    is_group_event = event_type in _GROUP_EVENTS
+    if event_type not in (C2C_MESSAGE_CREATE, C2C_MSG_RECEIVE) and not is_group_event:
         return None
 
     author = data.get("author") or {}
-    content = strip_mentions(str(data.get("content") or ""), self_id)
+    raw_content = str(data.get("content") or "")
+    content = strip_mentions(raw_content, self_id)
     message_id = str(data.get("id") or "")
-    is_group = event_type == GROUP_AT_MESSAGE_CREATE
+    is_group = is_group_event
+    # @ 判定：@ 事件恒为真；普通群消息看原文里有没有 @ 占位
+    mentioned = bool(event_type == GROUP_AT_MESSAGE_CREATE or ("<@" in raw_content))
 
     if is_group:
         group_id = str(data.get("group_openid") or "")
@@ -61,6 +72,7 @@ def parse_event(event: Dict[str, Any], self_id: str = "") -> Optional[IncomingMe
         is_group=is_group,
         group_id=group_id,
         self_id=self_id,
+        mentioned=mentioned,
         message_id=message_id,
         source="official",
         raw=data,
@@ -135,13 +147,19 @@ class OfficialReceiver:
         official = bot.spec.official_config
 
         if incoming.is_group:
-            if not bool(bot.spec.qq("group_reply_enabled", False)):
+            if not bool(bot.spec.qq("group_reply_enabled", True)):
                 log.debug("机器人「%s」未开启群聊回复，忽略群消息", bot.name)
                 return False
             allowed = official.get("allowed_groups") or []
             if allowed and incoming.group_id not in {str(item) for item in allowed}:
                 log.debug("群 %s 不在机器人「%s」的白名单里", incoming.group_id, bot.name)
                 return False
+            if not incoming.mentioned:
+                if not bool(bot.spec.qq("group_reply_without_at", True)):
+                    log.debug(
+                        "机器人「%s」未开启「响应没有 @ 的群消息」，忽略普通群消息", bot.name
+                    )
+                    return False
             return True
 
         if not bool(official.get("allow_all_users", True)):

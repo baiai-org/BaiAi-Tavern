@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.async_utils import LoopSafeLock
@@ -83,7 +84,17 @@ class ProactiveScheduler:
 
     # ============================================================== 任务安装
     def _add(self, func, trigger, job_id: str, name: str) -> None:
+        """注册一个调度任务。
+
+        ``func`` 必须本身是**协程函数**（可以是 ``(协程函数, kwargs 字典)`` 元组
+        来附带参数）。不要用同步 lambda 包装：APScheduler 只认协程函数，
+        同步函数会被丢进线程池执行，lambda 里产生的协程永远不会被 await，
+        任务「到点静默消失」（V0.2.2 曾因此踩坑）。
+        """
         assert self.scheduler is not None
+        kwargs: Dict[str, Any] = {}
+        if isinstance(func, tuple):
+            func, kwargs = func[0], dict(func[1])
         try:
             self.scheduler.add_job(
                 func,
@@ -94,11 +105,18 @@ class ProactiveScheduler:
                 misfire_grace_time=120,
                 coalesce=True,
                 max_instances=1,
+                kwargs=kwargs or None,
             )
         except Exception as exc:  # pragma: no cover
             log.warning("注册任务 %s 失败: %s", job_id, exc)
 
     def _install_jobs(self) -> None:
+        """按「每个已启用机器人一套任务」安装（V0.2.2）。
+
+        旧版是全局一个触发器、触发后所有机器人同时发言；现在定时 / 空闲 /
+        随机三类触发都是**每机器人独立**的：各自的时间抖动、概率判定、
+        频率限制与重排，多机器人不再同一秒集体发消息。
+        """
         if self.scheduler is None:
             return
         config = self.rt.config
@@ -108,32 +126,46 @@ class ProactiveScheduler:
             except Exception:
                 pass
 
-        # 定时触发
+        bots = list(self.rt.enabled_bots())
+
+        # 定时触发：每个机器人一个任务；jitter 最多迟到 90 秒，让
+        # 「09:00」这种配置点在各机器人之间自然错开
         if bool(config.get("proactive.scheduled_enabled", True)):
-            for index, item in enumerate(config.get("proactive.scheduled_times", []) or []):
+            for item in config.get("proactive.scheduled_times", []) or []:
                 hour, minute = parse_hhmm(item, (-1, -1))
                 if hour < 0:
                     continue
-                self._add(
-                    self._job_scheduled,
-                    CronTrigger(hour=hour, minute=minute, jitter=90),
-                    "proactive_scheduled_%02d%02d_%d" % (hour, minute, index),
-                    "定时主动消息 %02d:%02d" % (hour, minute),
-                )
+                for bot in bots:
+                    # 必须直接传协程函数（bound method）+ kwargs：若用同步 lambda 包装，
+                    # APScheduler 会判定为普通函数丢进线程池，lambda 返回的协程永远不会
+                    # 被 await，任务「到点静默消失」（V0.2.2 曾因此踩坑）。
+                    self._add(
+                        (self._job_scheduled, {"bot_id": bot.id}),
+                        CronTrigger(hour=hour, minute=minute, jitter=90),
+                        "proactive_scheduled_%02d%02d_%s" % (hour, minute, bot.id),
+                        "定时主动消息 %02d:%02d · %s" % (hour, minute, bot.name),
+                    )
 
-        # 空闲触发
+        # 空闲触发：每个机器人一个周期检查（±60 秒抖动错开）
         if bool(config.get("proactive.idle_enabled", True)):
             interval = max(1, int(config.get("proactive.idle_check_interval_minutes", 15) or 15))
-            self._add(
-                self._job_idle,
-                IntervalTrigger(minutes=interval),
-                "proactive_idle",
-                "空闲检查（每 %d 分钟）" % interval,
-            )
+            for bot in bots:
+                self._add(
+                    (self._job_idle, {"bot_id": bot.id}),
+                    IntervalTrigger(minutes=interval, jitter=60),
+                    "proactive_idle_%s" % bot.id,
+                    "空闲检查 · %s（每 %d 分钟）" % (bot.name, interval),
+                )
 
-        # 随机触发
+        # 随机触发：每个机器人各自独立的重排链（时间互不相同）
         if bool(config.get("proactive.random_enabled", False)):
-            self._schedule_next_random()
+            for bot in bots:
+                self._schedule_next_random(bot.id, bot.name)
+
+        log.info(
+            "主动消息调度任务安装完成：共 %d 个",
+            len(self.scheduler.get_jobs()),
+        )
 
         # 配置热重载
         self._add(
@@ -143,29 +175,36 @@ class ProactiveScheduler:
             "配置热重载检查",
         )
 
-    def _schedule_next_random(self) -> None:
+    def _schedule_next_random(self, bot_id: str = "", bot_name: str = "") -> None:
         assert self.scheduler is not None
         when = triggers.next_random_time(self.rt.config)
         delay_minutes = max(0.0, (when - now()).total_seconds() / 60)
-        log.info("下一次随机主动消息安排在 %s（%.0f 分钟后）", when.strftime("%m-%d %H:%M"), delay_minutes)
+        log.info(
+            "机器人「%s」的下次随机主动消息安排在 %s（%.0f 分钟后）",
+            bot_name or bot_id or "默认",
+            when.strftime("%m-%d %H:%M"),
+            delay_minutes,
+        )
         self._add(
-            self._job_random,
+            (self._job_random, {"bot_id": bot_id}),
             DateTrigger(run_date=when),
-            "proactive_random",
-            "随机主动消息",
+            "proactive_random_%s" % (bot_id or "default"),
+            "随机主动消息 · %s" % (bot_name or "默认"),
         )
 
     # ================================================================== 任务
-    async def _job_scheduled(self) -> None:
-        await self.run("scheduled")
+    async def _job_scheduled(self, bot_id: str) -> None:
+        log.info("定时主动消息任务触发（bot=%s）", bot_id)
+        await self.run("scheduled", bot_id=bot_id)
 
-    async def _job_idle(self) -> None:
-        await self.run("idle")
+    async def _job_idle(self, bot_id: str) -> None:
+        await self.run("idle", bot_id=bot_id)
 
-    async def _job_random(self) -> None:
-        await self.run("random")
+    async def _job_random(self, bot_id: str) -> None:
+        await self.run("random", bot_id=bot_id)
         if bool(self.rt.config.get("proactive.random_enabled", False)):
-            self._schedule_next_random()
+            bot = self.rt.bot_by_id(bot_id)
+            self._schedule_next_random(bot_id, bot.name if bot is not None else "")
 
     async def _job_watch_config(self) -> None:
         try:
@@ -178,7 +217,7 @@ class ProactiveScheduler:
             log.warning("配置热重载失败: %s", exc)
 
     # ================================================================ 准入检查
-    async def _evaluate(self, trigger_type: str, force: bool) -> Tuple[bool, str]:
+    async def _evaluate(self, trigger_type: str, force: bool, bot_id: Optional[str]) -> Tuple[bool, str]:
         config = self.rt.config
 
         if force:
@@ -199,12 +238,13 @@ class ProactiveScheduler:
             if not decision.allowed:
                 return False, decision.reason
 
-        today_total = await crud.proactive_count_today(self.rt.db)
+        # V0.2.2：每日上限与最小间隔都按**单个机器人**独立计算
+        today_total = await crud.proactive_count_today(self.rt.db, bot_id=bot_id or None)
         decision = triggers.check_global_limit(config, today_total)
         if not decision.allowed:
             return False, decision.reason
 
-        last = await crud.last_proactive(self.rt.db)
+        last = await crud.last_proactive(self.rt.db, bot_id=bot_id or None)
         decision = triggers.check_min_interval(config, (last or {}).get("sent_at"))
         if not decision.allowed:
             return False, decision.reason
@@ -275,7 +315,7 @@ class ProactiveScheduler:
         if self.rt.sync_config():
             self.reschedule()
 
-        allowed, reason = await self._evaluate(trigger_type, force)
+        allowed, reason = await self._evaluate(trigger_type, force, bot_id)
         if not allowed:
             return self._skip(trigger_type, reason)
 
@@ -284,9 +324,15 @@ class ProactiveScheduler:
             return self._skip(trigger_type, reason)
 
         outcomes: List[Dict[str, Any]] = []
+        # 同一轮里已经选过的角色（多机器人同轮触发时避免都用同一个角色，
+        # 让几条主动消息内容各不相同）
+        used_character_ids: set = set()
         for bot in targets:
-            outcome = await self._run_for_bot(bot, trigger_type, force, character_id)
+            outcome = await self._run_for_bot(bot, trigger_type, force, character_id, used_character_ids)
             outcomes.append(outcome)
+            picked = str(outcome.get("character_id") or "")
+            if picked:
+                used_character_ids.add(picked)
             # 定时/空闲/随机：每个机器人都要发；但配置错误（被跳过）没必要反复重试
             if outcome.get("ok"):
                 continue
@@ -316,6 +362,7 @@ class ProactiveScheduler:
         trigger_type: str,
         force: bool,
         character_id: Optional[str],
+        used_character_ids: Optional[set] = None,
     ) -> Dict[str, Any]:
         """让一个机器人按它自己绑定的角色发一条主动消息。"""
         base = {"bot_id": bot.id, "bot_name": bot.name, "trigger": trigger_type}
@@ -353,6 +400,13 @@ class ProactiveScheduler:
         else:
             pool = characters
             bound_forced = False
+            # 同轮里其它机器人已经选走的角色优先避开（绑定指定时不回避）
+            if used_character_ids:
+                filtered = [
+                    item for item in pool if str(item.get("id")) not in used_character_ids
+                ]
+                if filtered:
+                    pool = filtered
 
         counts = await crud.proactive_counts_today_by_character(self.rt.db)
         last = await crud.last_proactive(self.rt.db)
@@ -468,6 +522,24 @@ class ProactiveScheduler:
             bot_id=bot.id,
             bot_name=bot.name,
         )
+        # V0.2.2：主动消息以图片/语音发出时，记录里那条消息标记为带媒体
+        if out.has_media:
+            try:
+                if out.voice_paths:
+                    await crud.update_last_message_media(
+                        self.rt.db, str(character.get("id") or ""), "voice", str(out.voice_paths[0])
+                    )
+                elif out.image_path:
+                    await crud.update_last_message_media(
+                        self.rt.db, str(character.get("id") or ""), "image", str(out.image_path)
+                    )
+            except Exception as exc:  # pragma: no cover
+                log.debug("标记主动消息媒体记录失败：%s", exc)
+        # V0.2.2：顺手压缩过期对话（后台跑）
+        try:
+            asyncio.create_task(self.rt.maybe_summarize(str(character.get("id") or "")))
+        except Exception:  # pragma: no cover
+            pass
         elapsed = seconds_since(iso_now()) or 0
 
         result = {

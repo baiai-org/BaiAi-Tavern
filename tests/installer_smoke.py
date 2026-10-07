@@ -11,7 +11,7 @@
 2. **主程序卸载路径**：模拟「设置 → 应用」点卸载（安装目录里的主程序 ``--uninstall``），
    验证卸载信息立刻消失、程序文件被清理、正在运行的自己由延迟批处理删掉；
 3. **升级安装**：旧版本还在运行时也要能装上（先自动关掉被占用进程）；
-4. **成品模式**（存在 ``dist\\BaiAi-Tavern V0.2.1.exe`` 时执行）：
+4. **成品模式**（存在 ``dist\\BaiAi-Tavern V0.2.2.exe`` 时执行）：
    用真实安装包装一次、再用装出来的主程序 ``--uninstall`` 卸一次。
 
 所有操作都指向临时目录与独立的注册表项，不会影响机器上真实的安装。
@@ -137,6 +137,7 @@ def run_update_phase(tmp: Path, checker) -> None:
     import threading
 
     from app import updater
+    from app.parallel_download import plan_ranges
 
     # ------------------------------------------------------------ 版本解析与比较
     checker.check(
@@ -209,9 +210,15 @@ def run_update_phase(tmp: Path, checker) -> None:
     # ------------------------------------------------------------ 本地 GitHub 模拟：检查 + 下载
     exe_bytes = b"fake-updater-installer-payload" * 4096  # ~80KB，模拟安装包
     sums_text = "%s  BaiAi-Tavern-V0.3.exe\n" % updater.sha256_file(_write_bytes(sums_file / "real.exe", exe_bytes))
+    # V0.2.2：多线程分段下载要真分段，80KB 不够（每段最小 512KB），
+    # 再放一个 ~4MB 的大文件，让 plan_ranges 切成多段走真并行
+    import os as _os
+
+    big_bytes = _os.urandom(4 * 1024 * 1024)
     served = {
         "BaiAi-Tavern-V0.3.exe": exe_bytes,
         "SHA256SUMS.txt": sums_text.encode("utf-8"),
+        "large.bin": big_bytes,
     }
     local_release = dict(fake_release)
     local_release["assets"] = [
@@ -219,9 +226,60 @@ def run_update_phase(tmp: Path, checker) -> None:
         {"name": "SHA256SUMS.txt", "browser_download_url": "http://127.0.0.1:PORT/x/SHA256SUMS.txt"},
     ]
 
+    range_requests: List[tuple] = []
+
     class _Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def _serve_binary(self, name: str, send_body: bool):
+            data = served.get(name)
+            if data is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            range_header = self.headers.get("Range")
+            if range_header and range_header.startswith("bytes="):
+                try:
+                    spec = range_header[len("bytes="):].split("-", 1)
+                    start = int(spec[0])
+                    end = int(spec[1]) if spec[1] else len(data) - 1
+                    end = min(end, len(data) - 1)
+                except (ValueError, IndexError):
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                if start >= len(data) or start > end:
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                chunk = data[start:end + 1]
+                range_requests.append((name, start, end))
+                self.send_response(206)
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, len(data)))
+                self.send_header("Content-Length", str(len(chunk)))
+                self.end_headers()
+                if send_body:
+                    self.wfile.write(chunk)
+                return
+            if not send_body:  # HEAD
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_HEAD(self):
+            if self.path.startswith("/api/"):
+                self.send_response(200)
+                self.end_headers()
+                return
+            self._serve_binary(self.path.rsplit("/", 1)[-1], send_body=False)
 
         def do_GET(self):
             if self.path.startswith("/api/"):
@@ -232,16 +290,7 @@ def run_update_phase(tmp: Path, checker) -> None:
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            name = self.path.rsplit("/", 1)[-1]
-            data = served.get(name)
-            if data is None:
-                self.send_response(404)
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            self._serve_binary(self.path.rsplit("/", 1)[-1], send_body=True)
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     port = server.server_address[1]
@@ -286,6 +335,42 @@ def run_update_phase(tmp: Path, checker) -> None:
         checker.check(
             "按 SHA256SUMS.txt 校验下载文件通过",
             updater.verify_sha256(path, sums_text) is True,
+            "",
+        )
+        # V0.2.2：多线程分段下载真并行验证（~4MB → 8 段以上）
+        big_url = "http://127.0.0.1:%d/x/large.bin" % port
+        range_requests.clear()
+        big_dir = tmp / "download_big"
+        big_dir.mkdir(exist_ok=True)
+        big_path = updater.download(big_url, dest_dir=big_dir)
+        big_ranges = [r for r in range_requests if r[0] == "large.bin"]
+        checker.check(
+            "大文件并行 Range 下载：字节一致",
+            big_path.is_file() and big_path.read_bytes() == big_bytes,
+            "收到 %d 个分段请求" % len(big_ranges),
+        )
+        # 探测（HEAD / Range: bytes=0-0）不记入分段；真实分段 = 非 0-0 的 Range 请求
+        real_ranges = [r for r in big_ranges if r[1] != 0 or r[2] != 0]
+        checker.check(
+            "大文件走了多线程分段（>=2 个 Range 请求且覆盖完整）",
+            len(real_ranges) >= 2
+            and min(r[1] for r in real_ranges) == 0
+            and max(r[2] for r in real_ranges) == len(big_bytes) - 1,
+            "分段 %d 个（含探测）：%s" % (len(big_ranges), sorted(big_ranges)[:4]),
+        )
+        checker.check(
+            "分段切分函数：10MB / 16 线程 → 16 段且无缝拼接",
+            (lambda rngs: len(rngs) == 16
+             and rngs[0][0] == 0
+             and rngs[-1][1] == 10 * 1024 * 1024 - 1
+             and all(rngs[i][1] + 1 == rngs[i + 1][0] for i in range(len(rngs) - 1)))(
+                plan_ranges(10 * 1024 * 1024, 16)
+            ),
+            "",
+        )
+        checker.check(
+            "分段切分函数：小文件（600KB）→ 1 段（低于每段下限不硬拆）",
+            len(plan_ranges(600 * 1024, 16)) == 1,
             "",
         )
         try:

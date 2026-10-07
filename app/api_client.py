@@ -285,9 +285,32 @@ class ApiClient:
     def conversations(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/api/conversations")
 
-    def messages(self, character_id: str, limit: int = 200) -> Dict[str, Any]:
+    def messages(
+        self,
+        character_id: str,
+        limit: int = 300,
+        search: str = "",
+        month: str = "",
+        day: str = "",
+    ) -> Dict[str, Any]:
+        params = {"limit": limit}
+        if search:
+            params["search"] = search
+        if month:
+            params["month"] = month
+        if day:
+            params["day"] = day
         return self._request(
-            "GET", "/api/conversations/%s/messages" % character_id, params={"limit": limit}
+            "GET", "/api/conversations/%s/messages" % character_id, params=params
+        )
+
+    def message_months(self, character_id: str) -> Dict[str, Any]:
+        return self._request("GET", "/api/conversations/%s/months" % character_id)
+
+    def message_days(self, character_id: str, month: str = "") -> Dict[str, Any]:
+        params = {"month": month} if month else None
+        return self._request(
+            "GET", "/api/conversations/%s/days" % character_id, params=params
         )
 
     def clear_messages(self, character_id: str) -> Dict[str, Any]:
