@@ -32,6 +32,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+import yaml
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -326,6 +328,93 @@ def main() -> int:
             "群白名单清空后表示不限（仍能回复）",
             wait_for(lambda: len(mock.official_sent()) > before, timeout=45),
             str(mock.official_sent()[before:])[:200],
+        )
+
+        # ------------------------------------------------- 全量模式（接收所有消息）
+        checker.phase("官方通道：全量群消息（接收所有消息）与重复推送去重")
+
+        # 真实平台（实测抓包）：@ 机器人时以 GROUP_MESSAGE_CREATE 下发、
+        # content 带 <@AppID> 标记；只有标记匹配自己的 AppID 才算 @ 了自己
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "全量模式里 @ 了我",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+        )
+        checker.check(
+            "全量群消息 @ 了本机器人（<@AppID> 匹配）会回复",
+            wait_for(
+                lambda: any(
+                    item["kind"] == "group" for item in mock.official_sent()[before:]
+                ),
+                timeout=45,
+            ),
+            str(mock.official_sent()[before:])[:200],
+        )
+
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "全量模式里 @ 了别的机器人",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid="some-other-app-id",
+        )
+        time.sleep(8)
+        checker.check(
+            "全量群消息 @ 了别的机器人时不回复（@ 谁谁回答，多机器人群里不抢话）",
+            len(mock.official_sent()) == before,
+            str(mock.official_sent()[before:])[:200],
+        )
+
+        before = len(mock.official_sent())
+        mock.emit_group("全量模式里的普通消息（没有 @）", event_type="GROUP_MESSAGE_CREATE")
+        checker.check(
+            "全量群消息里没人 @ 时按「响应普通群消息」开关回复（默认开）",
+            wait_for(
+                lambda: any(item["kind"] == "group" for item in mock.official_sent()[before:]),
+                timeout=45,
+            ),
+            str(mock.official_sent()[before:])[:200],
+        )
+        _cfg_path = data_dir / "config.yaml"
+        _cfg = yaml.safe_load(_cfg_path.read_text(encoding="utf-8"))
+        _cfg["qq"]["group_reply_without_at"] = False
+        _cfg_path.write_text(yaml.safe_dump(_cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        client.post("/api/config/reload", timeout=20)
+        time.sleep(1.5)
+        before = len(mock.official_sent())
+        mock.emit_group("关掉普通群消息开关后", event_type="GROUP_MESSAGE_CREATE")
+        time.sleep(8)
+        checker.check(
+            "「响应没有 @ 的群消息」关掉后全量普通群消息不再回复",
+            len(mock.official_sent()) == before,
+            str(mock.official_sent()[before:])[:200],
+        )
+        _cfg["qq"]["group_reply_without_at"] = True
+        _cfg_path.write_text(yaml.safe_dump(_cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        client.post("/api/config/reload", timeout=20)
+        time.sleep(1.5)
+
+        # 官方文档：相同 msg_id 可能重复推送，需结合 msg_id 去重（@ 事件与全量
+        # 事件可能同时收到同一条，不去重会回两遍）
+        before = len(mock.official_sent())
+        mock.emit_c2c("这条消息会被平台重复推一次", id="mock-dup-1")
+        mock.emit_c2c("这条消息会被平台重复推一次", id="mock-dup-1")
+        dup_replied = wait_for(
+            lambda: any(
+                item["kind"] == "c2c" and item.get("msg_id") == "mock-dup-1"
+                for item in mock.official_sent()[before:]
+            ),
+            timeout=45,
+        )
+        time.sleep(6)
+        dup_replies = [
+            item for item in mock.official_sent()[before:]
+            if item["kind"] == "c2c" and item.get("msg_id") == "mock-dup-1"
+        ]
+        checker.check(
+            "同一 msg_id 重复推送只回复一次（官方平台会重推，需去重）",
+            dup_replied and len(dup_replies) == 1,
+            "回复了 %d 次：%s" % (len(dup_replies), str(dup_replies)[:160]),
         )
 
         # ------------------------------------------------------------ 主动消息

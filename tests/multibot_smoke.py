@@ -84,10 +84,10 @@ def wait_for(predicate, timeout: float = 30.0, interval: float = 0.2) -> bool:
     return False
 
 
-def official_values(mock, target_openid: str) -> Dict[str, Any]:
+def official_values(mock, target_openid: str, app_id: str = mock_servers.OFFICIAL_APP_ID) -> Dict[str, Any]:
     """某个机器人的官方凭据（指向它自己的 mock 开放平台实例）。"""
     return {
-        "app_id": mock_servers.OFFICIAL_APP_ID,
+        "app_id": app_id,
         "app_secret": mock_servers.OFFICIAL_APP_SECRET,
         "api_domain": mock.base_url,
         "token_url": "%s/app/getAppAccessToken" % mock.base_url,
@@ -142,7 +142,7 @@ def prepare_config(config_path: Path, mock_a, mock_b, api_port: int) -> None:
     for key in LEGACY_QQ_KEYS:
         qq.pop(key, None)
 
-    # 第 2 个机器人（bots: 段）
+    # 第 2 个机器人（bots: 段）——独立 AppID，模拟真实平台里两个不同的机器人应用
     second = {
         "id": "bot2",
         "name": "副机器人",
@@ -151,7 +151,7 @@ def prepare_config(config_path: Path, mock_a, mock_b, api_port: int) -> None:
         "character_name": "",
         "reply_enabled": True,
         "group_reply_enabled": False,
-        "official": official_values(mock_b, TARGET_B),
+        "official": official_values(mock_b, TARGET_B, app_id=APP_ID_B),
     }
     data["bots"] = [second]
 
@@ -185,6 +185,9 @@ def load_config(path: Path) -> Dict[str, Any]:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
 
+APP_ID_B = "mock-app-id-2"  # 第 2 个机器人的 AppID（两个机器人必须是不同的应用）
+
+
 def assistant_messages(client: httpx.Client, character_id: str) -> List[Dict[str, Any]]:
     response = client.get("/api/conversations/%s/messages" % character_id, timeout=20.0)
     data = response.json() if response.status_code == 200 else {}
@@ -211,7 +214,7 @@ def main() -> int:
 
     mock_a = mock_servers.MockProcess(port=mock_a_port).start()
     mock_a.reset(reply_text=REPLY_TEXT, proactive_text=PROACTIVE_TEXT)
-    mock_b = mock_servers.MockProcess(port=mock_b_port).start()
+    mock_b = mock_servers.MockProcess(port=mock_b_port, app_id=APP_ID_B).start()
     mock_b.reset(reply_text=REPLY_TEXT, proactive_text=PROACTIVE_TEXT)
 
     data_dir = Path(tempfile.mkdtemp(prefix="tavern-multibot-"))
@@ -422,6 +425,88 @@ def main() -> int:
             "A=%d/%d B=%d"
             % (len(assistant_messages(client, id_a)), a_messages, len(assistant_messages(client, id_b))),
         )
+
+        # ----------------------------------------------- 多机器人群：@ 谁谁回答
+        client.put("/api/bots/bot1", json={"group_reply_enabled": True}, timeout=30.0)
+        client.put("/api/bots/bot2", json={"group_reply_enabled": True}, timeout=30.0)
+        time.sleep(1.5)
+
+        # 真实平台（「接收所有消息」全量模式）：群里一条消息会推给群里**每个**
+        # 机器人，@ 机器人时 content 带 <@AppID> 标记。模拟方式：同一条群消息
+        # 同时推到两个 mock 平台（各自代表一个机器人应用）。
+        def _emit_to_both(content: str, mention_appid: str = "", message_id: str = "") -> None:
+            for mock in (mock_a, mock_b):
+                mock.emit_group(
+                    content,
+                    event_type="GROUP_MESSAGE_CREATE",
+                    mention_appid=mention_appid,
+                    **({"id": message_id} if message_id else {}),
+                )
+
+        before_a = len(mock_a.official_sent())
+        before_b = len(mock_b.official_sent())
+        a_messages = len(assistant_messages(client, id_a))
+        b_messages = len(assistant_messages(client, id_b))
+        _emit_to_both("群里 @ 了主机器人", mention_appid=mock_servers.OFFICIAL_APP_ID)
+        checker.check(
+            "@ 主机器人时只有主机器人回复（副机器人看到同一条消息但不抢话）",
+            wait_for(
+                lambda: any(
+                    item.get("kind") == "group" for item in mock_a.official_sent()[before_a:]
+                ),
+                timeout=60,
+            )
+            and len(mock_b.official_sent()) == before_b,
+            "A 侧新增=%d B 侧新增=%d"
+            % (len(mock_a.official_sent()) - before_a, len(mock_b.official_sent()) - before_b),
+        )
+        checker.check(
+            "群回复由被 @ 机器人绑定的角色生成（A 的对话增加，B 的不变）",
+            wait_for(lambda: len(assistant_messages(client, id_a)) > a_messages, timeout=30)
+            and len(assistant_messages(client, id_b)) == b_messages,
+            "A=%d/%d B=%d/%d"
+            % (len(assistant_messages(client, id_a)), a_messages, b_messages, len(assistant_messages(client, id_b))),
+        )
+
+        before_a = len(mock_a.official_sent())
+        before_b = len(mock_b.official_sent())
+        b_messages = len(assistant_messages(client, id_b))
+        _emit_to_both("群里 @ 了副机器人", mention_appid=APP_ID_B)
+        checker.check(
+            "@ 副机器人时只有副机器人回复（对称验证）",
+            wait_for(
+                lambda: any(
+                    item.get("kind") == "group" for item in mock_b.official_sent()[before_b:]
+                ),
+                timeout=60,
+            )
+            and len(mock_a.official_sent()) == before_a,
+            "A 侧新增=%d B 侧新增=%d"
+            % (len(mock_a.official_sent()) - before_a, len(mock_b.official_sent()) - before_b),
+        )
+        checker.check(
+            "副机器人的群回复用了它绑定的角色 B",
+            wait_for(lambda: len(assistant_messages(client, id_b)) > b_messages, timeout=30),
+            "B=%d/%d" % (len(assistant_messages(client, id_b)), b_messages),
+        )
+
+        before_a = len(mock_a.official_sent())
+        before_b = len(mock_b.official_sent())
+        _emit_to_both("群里普通消息，没有 @ 任何人")
+        checker.check(
+            "没有人 @ 的普通群消息：开了「响应普通群消息」的两个机器人都回复",
+            wait_for(
+                lambda: any(item.get("kind") == "group" for item in mock_a.official_sent()[before_a:])
+                and any(item.get("kind") == "group" for item in mock_b.official_sent()[before_b:]),
+                timeout=60,
+            ),
+            "A 侧新增=%d B 侧新增=%d"
+            % (len(mock_a.official_sent()) - before_a, len(mock_b.official_sent()) - before_b),
+        )
+
+        client.put("/api/bots/bot1", json={"group_reply_enabled": False}, timeout=30.0)
+        client.put("/api/bots/bot2", json={"group_reply_enabled": False}, timeout=30.0)
+        time.sleep(1.5)
 
         # ----------------------------------------------- 主动消息按机器人分别发送
         before_a = len(mock_a.official_sent())

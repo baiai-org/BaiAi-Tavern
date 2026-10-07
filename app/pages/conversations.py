@@ -120,11 +120,12 @@ class ConversationsPage(Page):
         media_row.setSpacing(8)
         self.btn_view_media = ghost_button("查看选中消息的图片 / 播放语音")
         self.btn_view_media.setEnabled(False)
-        self.media_status = hint_label("选中带图片 / 语音的消息后可查看（V0.2.2 起对话记录保存媒体）")
+        self.media_status = hint_label("图片 / 语音消息在列表里直接显示缩略图和播放徽标，点一下就能查看 / 播放")
         media_row.addWidget(self.btn_view_media)
         media_row.addWidget(self.media_status, 1)
         chat_layout.addLayout(media_row)
         self.message_table.itemSelectionChanged.connect(self._on_message_selected)
+        self.message_table.itemClicked.connect(self._on_message_cell_clicked)
         self.btn_view_media.clicked.connect(self._view_selected_media)
         self.chat_hint = hint_label(
             "提示：最近 7 天的对话原文进上下文；更早的会压缩成摘要（15 天内）供角色回忆，"
@@ -193,6 +194,66 @@ class ConversationsPage(Page):
 
     def _on_message_selected(self) -> None:
         self.btn_view_media.setEnabled(self._selected_media_row() is not None)
+
+    def _on_message_cell_clicked(self, row: int, column: int) -> None:
+        """点击列表里的图片缩略图 / 语音徽标，直接查看 / 播放。"""
+        if column != 2:
+            return
+        # 让该行成为选中行（_selected_media_row 依赖 selectionModel）
+        current = self.message_table.currentRow()
+        if current != row:
+            self.message_table.selectRow(row)
+        if self._selected_media_row() is not None:
+            self._view_selected_media()
+
+    @staticmethod
+    def _media_cell_widget(kind: str, path: str, caption: str, parent: QWidget):
+        """内容列的媒体单元格：图片显示缩略图，语音显示播放徽标。
+
+        文件不在磁盘上时返回 None（调用方退回纯文字显示）。
+        """
+        from PySide6.QtGui import QPixmap
+
+        from ..uikit import icon as _icon
+
+        if not Path(path).is_file():
+            return None
+        container = QWidget(parent)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 4, 2, 4)
+        layout.setSpacing(8)
+        if kind == "image":
+            label = QLabel(container)
+            pixmap = QPixmap(str(path))
+            if not pixmap.isNull():
+                label.setPixmap(
+                    pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+            else:
+                label.setText("图片")
+                label.setAlignment(Qt.AlignCenter)
+            label.setFixedSize(72, 72)
+            label.setToolTip(path)
+            layout.addWidget(label, 0, Qt.AlignTop)
+            text_label = QLabel(caption or "（用户发来了一张图片）", container)
+            text_label.setWordWrap(True)
+            layout.addWidget(text_label, 1)
+        else:
+            # 语音徽标：QPainter 画的播放三角（QLabel 只能 setPixmap，没有 setIcon）
+            # + 文字，不依赖 emoji 字形
+            from PySide6.QtCore import QSize
+
+            triangle = QLabel(container)
+            triangle.setPixmap(_icon("play", "#4a90d9", 16).pixmap(QSize(16, 16)))
+            triangle.setToolTip(path)
+            badge = QLabel("语音", container)
+            badge.setStyleSheet("font-weight: 600; color: #4a90d9;")
+            layout.addWidget(triangle, 0, Qt.AlignTop)
+            layout.addWidget(badge, 0, Qt.AlignTop)
+            text_label = QLabel(caption or "（用户发来了一条语音）", container)
+            text_label.setWordWrap(True)
+            layout.addWidget(text_label, 1)
+        return container
 
     def _view_selected_media(self) -> None:
         from pathlib import Path
@@ -300,7 +361,10 @@ class ConversationsPage(Page):
             if character_id != self.current_character_id:
                 return
             messages = (result or {}).get("messages") or []
+            # clearContents 清掉上一轮遗留的单元格 widget（媒体缩略图），
+            # 否则复用的行会带着上次的缩略图
             self.message_table.setRowCount(len(messages))
+            self.message_table.clearContents()
             for row, item in enumerate(messages):
                 role = str(item.get("role") or "")
                 speaker = self.current_character_name if role == "assistant" else "我"
@@ -308,30 +372,41 @@ class ConversationsPage(Page):
                     speaker += "（主动）"
                 content_text = str(item.get("content") or "")
                 kind = str(item.get("kind") or "text")
+                media_path = str(item.get("media_path") or "")
                 if kind == "image":
-                    # 图片消息：入库时已带【图片】前缀，缺了则补上
-                    if "【图片】" not in content_text:
-                        content_text = ("【图片】" + content_text).strip()
+                    # 图片消息：入库时已带【图片】前缀，缺了则补上；
+                    # 有存档文件时直接显示缩略图（V0.2.2）
+                    if "【图片】" in content_text:
+                        caption = content_text.split("】", 1)[1].strip()
+                    else:
+                        caption = content_text.strip()
                 elif kind == "voice":
-                    # 语音消息：保留【语音】前缀 + 转写文字（V0.2.2）
-                    if "【语音】" not in content_text:
-                        content_text = ("【语音】" + content_text).strip()
+                    # 语音消息：保留【语音】前缀 + 转写文字；有存档时显示播放徽标
+                    if "【语音】" in content_text:
+                        caption = content_text.split("】", 1)[1].strip()
+                    else:
+                        caption = content_text.strip()
                 else:
+                    caption = content_text
                     # 回复里的 [IMG] 生图标记已在 QQ 里发成图片，这里不重复展示
-                    lines = [ln for ln in content_text.splitlines() if not ln.strip().upper().startswith("[IMG]")]
+                    lines = [ln for ln in caption.splitlines() if not ln.strip().upper().startswith("[IMG]")]
                     cleaned = "\n".join(lines).strip()
                     if cleaned:
-                        content_text = cleaned
+                        caption = cleaned
                 time_item = QTableWidgetItem(str(item.get("created_at") or ""))
-                time_item.setData(Qt.UserRole + 1, str(item.get("kind") or "text"))
-                time_item.setData(Qt.UserRole + 2, str(item.get("media_path") or ""))
+                time_item.setData(Qt.UserRole + 1, kind)
+                time_item.setData(Qt.UserRole + 2, media_path)
                 self.message_table.setItem(row, 0, time_item)
                 speaker_item = QTableWidgetItem(speaker)
                 speaker_item.setForeground(
                     Qt.GlobalColor.gray if role != "assistant" else Qt.GlobalColor.white
                 )
                 self.message_table.setItem(row, 1, speaker_item)
-                self.message_table.setItem(row, 2, QTableWidgetItem(content_text))
+                cell = self._media_cell_widget(kind, media_path, caption, self.message_table)
+                if cell is not None:
+                    self.message_table.setCellWidget(row, 2, cell)
+                else:
+                    self.message_table.setItem(row, 2, QTableWidgetItem(caption))
             self.message_table.resizeRowsToContents()
             if messages:
                 self.message_table.scrollToBottom()

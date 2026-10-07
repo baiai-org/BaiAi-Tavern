@@ -992,12 +992,22 @@ def main() -> int:
             % (conversations_page.conversation_table.rowCount(), _row0_count()),
         )
         # 先清空选择再选第 0 行：刷新重新填充表格会清掉选中，产品侧会按
-        # 当前角色跟回；测试这里显式选一次，保证消息面板加载第 0 行
+        # 当前角色跟回；测试这里显式选一次，保证消息面板加载第 0 行。
+        # 「加载消息」任务按 key 去重（上一次加载还在跑时新加载被跳过），
+        # 所以和会话列表一样循环重试，直到消息面板真的加载出来
         conversations_page.conversation_table.clearSelection()
         conversations_page.conversation_table.selectRow(0)
+        messages_loaded = False
+        for _attempt in range(3):
+            messages_loaded = wait_until(
+                app, lambda: conversations_page.message_table.rowCount() >= 2, timeout=25
+            )
+            if messages_loaded:
+                break
+            conversations_page.refresh()
         checker.check(
             "对话页加载消息内容",
-            wait_until(app, lambda: conversations_page.message_table.rowCount() >= 2, timeout=25),
+            messages_loaded,
             "第0行=%s 当前角色=%s 消息行数=%d"
             % (
                 str(conversations_page.conversation_table.item(0, 0).text())
@@ -1007,6 +1017,113 @@ def main() -> int:
                 conversations_page.message_table.rowCount(),
             ),
         )
+
+        # V0.2.2：图片 / 语音消息在列表里直接显示缩略图 / 播放徽标
+        mock.client.post(
+            "/__control/emit_c2c",
+            json={
+                "id": "mock-gui-media-image",
+                "attachments": [
+                    {
+                        "url": mock.attachment_url("test.png"),
+                        "filename": "test.png",
+                        "content_type": "image/png",
+                    }
+                ],
+            },
+        )
+        mock.client.post(
+            "/__control/emit_c2c",
+            json={
+                "id": "mock-gui-media-voice",
+                "attachments": [
+                    {
+                        "url": mock.attachment_url("test.silk"),
+                        "voice_wav_url": mock.attachment_url("wav_variant.bin"),
+                        "filename": "voice.silk",
+                        "content_type": "audio/silk",
+                        "asr_refer_text": "界面里的语音消息",
+                    }
+                ],
+            },
+        )
+        media_loaded = False
+        for _attempt in range(3):
+            conversations_page.refresh()
+
+            def _has_media_row() -> bool:
+                t = conversations_page.message_table
+                for r in range(t.rowCount()):
+                    time_item = t.item(r, 0)
+                    if time_item is not None and t.item(r, 0).data(Qt.UserRole + 1) in ("image", "voice"):
+                        return True
+                return False
+
+            media_loaded = wait_until(app, _has_media_row, timeout=25)
+            if media_loaded:
+                break
+        checker.check(
+            "图片 / 语音消息入库后可在对话页看到",
+            media_loaded,
+            "消息行数=%d" % conversations_page.message_table.rowCount(),
+        )
+        if media_loaded:
+            table = conversations_page.message_table
+            image_row = voice_row = -1
+            for r in range(table.rowCount()):
+                time_item = table.item(r, 0)
+                kind = time_item.data(Qt.UserRole + 1) if time_item is not None else ""
+                if kind == "image" and image_row < 0:
+                    image_row = r
+                elif kind == "voice" and voice_row < 0:
+                    voice_row = r
+            image_cell = table.cellWidget(image_row, 2) if image_row >= 0 else None
+            has_pixmap = image_cell is not None and any(
+                not child.pixmap().isNull()
+                for child in image_cell.findChildren(QLabel)
+                if hasattr(child, "pixmap") and child.pixmap() is not None
+            )
+            checker.check(
+                "图片消息在列表里显示缩略图（QLabel 带真实 pixmap）",
+                has_pixmap,
+                "image_row=%d cell=%s" % (image_row, type(image_cell).__name__ if image_cell else "None"),
+            )
+            voice_cell = table.cellWidget(voice_row, 2) if voice_row >= 0 else None
+            voice_texts = " ".join(
+                child.text() for child in voice_cell.findChildren(QLabel)
+            ) if voice_cell is not None else ""
+            checker.check(
+                "语音消息在列表里显示播放徽标 + 转写文字",
+                voice_cell is not None and "语音" in voice_texts and "界面里的语音消息" in voice_texts,
+                "voice_row=%d texts=%s" % (voice_row, voice_texts[:120]),
+            )
+            if image_row >= 0:
+                # 前面循环里的 refresh() 可能还在跑：在飞的消息加载完成时会
+                # 重新填充表格（清掉选中），所以要先等加载任务都结束，
+                # 再重新定位图片行并选中
+                settled = wait_until(
+                    app,
+                    lambda: not (
+                        context.runner.is_busy("load_messages")
+                        or context.runner.is_busy("load_conversations")
+                    ),
+                    timeout=15,
+                )
+                pump(app, 0.3)
+                target = image_row
+                for r in range(table.rowCount()):
+                    ti = table.item(r, 0)
+                    if ti is not None and ti.data(Qt.UserRole + 1) == "image":
+                        target = r
+                        break
+                table.clearSelection()
+                table.selectRow(target)
+                pump(app, 0.2)
+                checker.check(
+                    "选中图片消息后「查看 / 播放」按钮可用（点缩略图可直接打开）",
+                    settled and conversations_page.btn_view_media.isEnabled(),
+                    "settled=%s row=%d rows=%d" % (settled, target, table.rowCount()),
+                )
 
         # ------------------------------------------------------- 模型路由
         window.show_page_by_key("models")

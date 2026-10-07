@@ -43,6 +43,10 @@ OFFICIAL_APP_ID = "mock-app-id"
 OFFICIAL_APP_SECRET = "mock-app-secret"
 OFFICIAL_TOKEN = "mock-access-token"
 
+# 每个 mock 实例自己的 AppID（多机器人自检里两个 mock 平台要像真实平台一样
+# 各自代表一个不同的机器人应用）；MockProcess 启动时通过 --app-id 覆盖
+APP_ID = OFFICIAL_APP_ID
+
 #: 默认的私聊 / 群聊目标 openid（官方平台只按 openid 发送）
 DEFAULT_OPENID = "mock-user-openid"
 DEFAULT_GROUP_OPENID = "mock-group-openid"
@@ -117,7 +121,7 @@ async def official_access_token(payload: Dict[str, Any] = Body(default={})) -> J
     app_id = str(payload.get("appId") or "")
     secret = str(payload.get("clientSecret") or "")
     STATE["token_calls"] = int(STATE.get("token_calls", 0)) + 1
-    if app_id != OFFICIAL_APP_ID:
+    if app_id != APP_ID:
         # 100007：AppID 无效 / 机器人状态异常
         return JSONResponse({"code": 100007, "message": "appid invalid"})
     if secret != OFFICIAL_APP_SECRET:
@@ -361,19 +365,37 @@ async def control_emit_c2c(payload: Dict[str, Any] = Body(default={})) -> Dict[s
 
 @app.post("/__control/emit_group")
 async def control_emit_group(payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
-    """模拟「群里 @ 了机器人」（GROUP_AT_MESSAGE_CREATE），可带附件。"""
+    """模拟群消息推送到本 mock 平台的网关（默认 @ 事件；全量模式见 event_type）。
+
+    * ``event_type``：``GROUP_AT_MESSAGE_CREATE``（默认，@ 事件，content 不带 @ 标记）
+      或 ``GROUP_MESSAGE_CREATE``（「接收所有消息」全量模式：群里每条消息都会推给
+      群里的**每个**机器人，content 保留 ``<@AppID>`` @ 标记——真实平台实测格式）。
+    * ``mention_appid``：全量模式下被 @ 的机器人 AppID，会在 content 前缀
+      ``<@{appid}>``（真实平台 @ 机器人时就是这样带的）。
+    """
+    content = str(payload.get("content") or "群里在聊什么")
+    mention_appid = str(payload.get("mention_appid") or "").strip()
+    if mention_appid:
+        content = "<@%s> %s" % (mention_appid, content)
     data = {
         "id": payload.get("id") or "mock-group-%d" % (STATE["official_seq"] + 1),
-        "content": payload.get("content") or "群里在聊什么",
+        "content": content,
         "timestamp": str(int(time.time())),
         "group_openid": payload.get("group_openid") or DEFAULT_GROUP_OPENID,
         "author": {"member_openid": payload.get("member_openid") or DEFAULT_MEMBER_OPENID},
     }
+    if mention_appid:
+        # 与真实事件一致：mentions 列出被 @ 的对象（@ 事件本身不含机器人自身，
+        # 全量事件里则是被 @ 的 AppID）
+        data["mentions"] = [{"id": mention_appid, "bot": True}]
     attachments = payload.get("attachments")
     if attachments:
         data["attachments"] = attachments
-    delivered = await _broadcast_official("GROUP_AT_MESSAGE_CREATE", data)
-    return {"ok": bool(delivered), "delivered": delivered, "id": data["id"]}
+    event_type = str(payload.get("event_type") or "GROUP_AT_MESSAGE_CREATE")
+    if event_type not in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
+        event_type = "GROUP_AT_MESSAGE_CREATE"
+    delivered = await _broadcast_official(event_type, data)
+    return {"ok": bool(delivered), "delivered": delivered, "id": data["id"], "event_type": event_type}
 
 
 @app.post("/__control/emit_friend_add")
@@ -422,6 +444,7 @@ async def control_state() -> Dict[str, Any]:
         "official_identify": int(STATE.get("official_identify", 0)),
         "official_resume": int(STATE.get("official_resume", 0)),
         "official_drops": int(STATE.get("official_drops", 0)),
+        "app_id": str(APP_ID),
         "resets": int(STATE.get("resets", 0)),
         "token_calls": int(STATE.get("token_calls", 0)),
         "llm_calls": len(STATE["llm_requests"]),
@@ -444,11 +467,13 @@ async def control_state() -> Dict[str, Any]:
 
 
 # ======================================================= V0.2 附件文件 mock ==
-# 1x1 蓝色 PNG（真实 PNG 头 + IHDR/IDAT/IEND，Pillow 可直接解码）
+# 1x1 蓝色 PNG（真实 PNG 头 + IHDR/IDAT/IEND，各块 CRC 已验证，
+# Pillow / Qt QPixmap 都能直接解码；旧版手写字节的 IDAT CRC 是错的，
+# Qt 解码时报 "libpng error: IDAT: incorrect data check"）
 _MOCK_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
-    b"\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01"
-    b"\x00\x05\x9a\x19\xa2\x00\x00\x00\x00IEND\xaeB\x60\x82"
+    b"\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\xdac\x10\x11\xf9\x0f\x00\x01g"
+    b"\x01(z1\x83)\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
 _MOCK_SILK_CACHE: Optional[bytes] = None
@@ -686,9 +711,10 @@ class MockProcess:
     不会留孤儿进程（历史上每次崩溃退出泄漏一个，积累几十个）。
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 3100):
+    def __init__(self, host: str = "127.0.0.1", port: int = 3100, app_id: str = OFFICIAL_APP_ID):
         self.host = host
         self.port = port
+        self.app_id = app_id
         self.process = None
         self.output: List[str] = []
         self._client = None
@@ -717,7 +743,11 @@ class MockProcess:
         env["PYTHONPATH"] = str(root)
         env["PYTHONIOENCODING"] = "utf-8"
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "tests.mock_servers", "--host", self.host, "--port", str(self.port)],
+            [
+                sys.executable, "-m", "tests.mock_servers",
+                "--host", self.host, "--port", str(self.port),
+                "--app-id", self.app_id,
+            ],
             cwd=str(root),
             env=env,
             stdout=subprocess.PIPE,
@@ -859,13 +889,22 @@ class MockProcess:
         content: str,
         group_openid: str = DEFAULT_GROUP_OPENID,
         member_openid: str = DEFAULT_MEMBER_OPENID,
+        event_type: str = "GROUP_AT_MESSAGE_CREATE",
+        mention_appid: str = "",
         **extra: Any
     ) -> Dict[str, Any]:
-        """向机器人推送一条群聊 @ 消息。"""
+        """向机器人推送一条群聊消息。
+
+        ``event_type`` 传 ``GROUP_MESSAGE_CREATE`` 即模拟「接收所有消息」全量模式
+        （真实平台会把群里每条消息推给群里每个机器人，@ 机器人时 content 带
+        ``<@AppID>`` 标记，用 ``mention_appid`` 指定被 @ 的机器人）。
+        """
         payload = {
             "content": content,
             "group_openid": group_openid,
             "member_openid": member_openid,
+            "event_type": event_type,
+            "mention_appid": mention_appid,
         }
         payload.update(extra)
         response = self.client.post("/__control/emit_group", json=payload)
@@ -924,10 +963,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="启动 mock QQ 官方机器人平台 + mock LLM 服务")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=3100)
+    parser.add_argument("--app-id", default=OFFICIAL_APP_ID, help="本 mock 平台代表的机器人 AppID")
     args = parser.parse_args()
 
     import uvicorn
 
+    global APP_ID
+    APP_ID = args.app_id
     base = "http://%s:%d" % (args.host, args.port)
     print("mock 服务已启动：%s" % base)
     print("  · 官方平台 REST : POST %s/app/getAppAccessToken、/v2/users/{openid}/messages" % base)

@@ -635,6 +635,120 @@ def phase_unit_logic(c: Checker) -> None:
     )
     c.check("strip_mentions 能处理多种 @ 形式", strip_mentions("<@!123> hi <@456>") == "hi")
 
+    # 多机器人群：全量群消息（GROUP_MESSAGE_CREATE）要精确判断 @ 的是不是本机器人
+    _full_self = parse_event(
+        {
+            "type": "GROUP_MESSAGE_CREATE",
+            "data": {
+                "id": "msg-full-1",
+                "content": "<@app-a> 你好",
+                "group_openid": "group-xyz",
+                "author": {"member_openid": "member-1"},
+            },
+        },
+        self_id="app-a",
+    )
+    c.check(
+        "全量群消息里 @ 占位匹配自己的 AppID → 判定为 @ 了自己",
+        _full_self is not None and _full_self.mentioned is True and _full_self.any_mentioned is True,
+        str(_full_self),
+    )
+    c.check(
+        "@ 了别的机器人的全量消息 → 判定为没有 @ 自己（但 any_mentioned 为真）",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-2",
+                    "content": "<@app-b> 你好",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is False
+        and parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-2b",
+                    "content": "<@app-b> 你好",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                },
+            },
+            self_id="app-a",
+        ).any_mentioned
+        is True,
+        "",
+    )
+    c.check(
+        "mentions 字段匹配自己的 AppID 也算 @ 了自己",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-3",
+                    "content": "你好呀",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                    "mentions": [{"id": "app-a", "bot": True}],
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is True,
+        "",
+    )
+    c.check(
+        "没有 @ 任何人的全量群消息 → mentioned / any_mentioned 都是假",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-4",
+                    "content": "普通聊天",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is False
+        and parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-4b",
+                    "content": "普通聊天",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                },
+            },
+            self_id="app-a",
+        ).any_mentioned
+        is False,
+        "",
+    )
+    c.check(
+        "@ 事件（GROUP_AT_MESSAGE_CREATE）仍然恒为 @ 了自己",
+        parse_event(
+            {
+                "type": "GROUP_AT_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-at-1",
+                    "content": "在吗",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is True,
+        "",
+    )
+
     c.check(
         "官方错误码有可读提示（AppID/AppSecret 不正确）",
         "100016" in describe_error({"code": 100016, "message": "invalid appid or secret"})
@@ -1708,6 +1822,56 @@ def phase_unit_logic(c: Checker) -> None:
     )
     _rest2, _prompt2 = _hub.parse_image_prompt("看，我给你画好了\n[IMG] 一朵会飞的云")
     c.check("[IMG] 独立成行仍然有效", _prompt2 == "一朵会飞的云", "rest2=%r" % _rest2)
+
+    # ---------------------------------------------------- 生图风格按角色人设匹配
+    from bot.media.images import detect_character_style, image_prompt_with_style
+
+    _anime_char = {
+        "name": "小月",
+        "description": "{{char}} 是异世界的魔法少女，猫耳，傲娇。",
+        "personality": "傲娇，二次元",
+    }
+    _real_char = {
+        "name": "沈青",
+        "description": "{{char}} 是一位写实风格的都市摄影师，常拍街拍写真。",
+        "personality": "冷静，喜欢胶片摄影",
+    }
+    _neutral_char = {"name": "阿哲", "description": "{{char}} 是普通青年。"}
+    c.check(
+        "二次元角色（魔法少女/猫耳）识别为动漫风格",
+        detect_character_style(_anime_char) == "anime",
+        detect_character_style(_anime_char),
+    )
+    c.check(
+        "真实风格角色（摄影师/街拍/写真）识别为写实风格",
+        detect_character_style(_real_char) == "realistic",
+        detect_character_style(_real_char),
+    )
+    c.check(
+        "没有风格特征的角色不强加风格",
+        detect_character_style(_neutral_char) == "" and detect_character_style({}) == "",
+        repr(detect_character_style(_neutral_char)),
+    )
+    _styled, _style = image_prompt_with_style("一只在窗边喝茶的猫", _anime_char, "auto")
+    c.check(
+        "二次元角色的绘图描述自动追加动漫风格短语",
+        _style == "anime" and "二次元动漫风格" in _styled and _styled.startswith("一只在窗边喝茶的猫"),
+        "style=%r prompt=%r" % (_style, _styled[:80]),
+    )
+    _styled2, _style2 = image_prompt_with_style("清晨的街头", _real_char, "auto")
+    c.check(
+        "写实角色的绘图描述自动追加写实风格短语",
+        _style2 == "realistic" and "写实摄影风格" in _styled2,
+        "style=%r prompt=%r" % (_style2, _styled2[:80]),
+    )
+    _styled3, _style3 = image_prompt_with_style("一只猫", _neutral_char, "anime")
+    c.check(
+        "全局开关可强制指定风格（anime 覆盖 auto 识别结果）",
+        _style3 == "anime" and "二次元动漫风格" in _styled3,
+        "style=%r" % _style3,
+    )
+    _styled4, _style4 = image_prompt_with_style("一只猫", _anime_char, "off")
+    c.check("全局开关 off 时不追加风格短语", _style4 == "" and _styled4 == "一只猫", "style=%r" % _style4)
 
     # ---------------------------------------------------------- TTS 风格参数
     from common.providers import ENGINE_EDGE_TTS

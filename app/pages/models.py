@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -130,6 +131,18 @@ class ModelsPage(Page):
         self.chk_allow_image.setChecked(True)
         self.chk_allow_image.toggled.connect(lambda _c: self._mark_dirty())
 
+        self.combo_image_style = QComboBox(media_group)
+        self.combo_image_style.addItems(
+            [
+                "auto",
+                "anime",
+                "realistic",
+                "off",
+            ]
+        )
+        self.combo_image_style.setCurrentIndex(0)
+        self.combo_image_style.currentIndexChanged.connect(lambda _i: self._mark_dirty())
+
         self.prob_voice = _ProbabilityRow(0.3, media_group)
         self.prob_voice.changed.connect(self._mark_dirty)
 
@@ -147,6 +160,14 @@ class ModelsPage(Page):
 
         media_form.addRow(self.chk_media_enabled)
         media_form.addRow(self.chk_allow_image)
+        add_form_row(
+            media_form,
+            "生图风格",
+            self.combo_image_style,
+            "角色发图时自动按人设匹配：二次元角色出动漫风、真实风格角色出写实照片风"
+            "（auto，默认）；也可强制指定（anime 动漫 / realistic 写实 / off 不指定）",
+            label_width=110,
+        )
         add_form_row(
             media_form,
             "语音回复概率",
@@ -195,6 +216,11 @@ class ModelsPage(Page):
         self.form_tts._refresh_voice_list()
         self.chk_media_enabled.setChecked(bool(media.get("enabled", True)))
         self.chk_allow_image.setChecked(bool(media.get("allow_image", True)))
+        _style = str(media.get("image_style") or "auto").lower()
+        if _style not in ("auto", "anime", "realistic", "off"):
+            _style = "auto"
+        _idx = self.combo_image_style.findText(_style)
+        self.combo_image_style.setCurrentIndex(_idx if _idx >= 0 else 0)
         _prob = media.get("voice_reply_probability")
         self.prob_voice.set_value(float(_prob if _prob is not None else 0.1))
         self.spin_voice_max.setValue(int(media.get("voice_max_chars", 180) or 180))
@@ -224,6 +250,7 @@ class ModelsPage(Page):
             "media": {
                 "enabled": self.chk_media_enabled.isChecked(),
                 "allow_image": self.chk_allow_image.isChecked(),
+                "image_style": self.combo_image_style.currentText(),
                 "voice_reply_probability": self.prob_voice.value(),
                 "voice_max_chars": int(self.spin_voice_max.value()),
                 "temp_days": int(self.spin_temp_days.value()),

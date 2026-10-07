@@ -39,7 +39,7 @@ from common.providers import (
 )
 
 from . import store
-from .images import ImageError, ImageGenerator
+from .images import ImageError, ImageGenerator, image_prompt_with_style
 from .instruct import (
     generate_qwen_audio_tags,
     generate_tts_instruction,
@@ -271,6 +271,12 @@ class MediaHub:
             spec = self._spec(SLOT_IMAGE)
             if spec.configured:
                 try:
+                    # 先按角色设定匹配画面风格（二次元角色 → 动漫风，真实角色 → 写实风），
+                    # 避免二次元角色画出来是真人照片
+                    override = str(self._media_cfg("image_style", "auto") or "auto").lower()
+                    image_prompt, style = image_prompt_with_style(image_prompt, character, override)
+                    if style:
+                        log.info("生图风格按角色设定识别为 %s（%s）", style, character.get("name"))
                     gen = ImageGenerator(spec)
                     data, ext = await gen.generate(image_prompt)
                     out.image_path = str(store.save_outbox(data, ext))

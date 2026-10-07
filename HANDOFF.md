@@ -12,7 +12,7 @@
 | 这是什么 | Windows 桌面应用：让多个 AI 角色通过 **QQ 官方机器人** 主动给你发消息、并回复你的消息 |
 | 运行形态 | 两个进程：**GUI 进程**（PySide6，含托盘）+ **Bot 进程**（FastAPI + uvicorn + APScheduler），通过本机 HTTP/WS 通信 |
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
-| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，开发环境 **685 项**（打包产物齐备时 **692 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
+| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，开发环境 **711 项**（打包产物齐备时 **752 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
 | 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
 | 当前版本 | V0.2.2 开发中（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理 + 按月/按天检索 + 语音存档；**尚未发布**，`main` / tag / Release 仍是 V0.2.1 |
 | 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
@@ -314,15 +314,15 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
 
 ---
 
-## 9. 自检体系（8 套，开发环境 685 项 / 打包产物齐备 692 项）
+## 9. 自检体系（8 套，开发环境 711 项 / 打包产物齐备 752 项）
 
 | 命令 | 项数 | 覆盖 |
 |---|---|---|
-| `python -m tests.smoke_test` | 267 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / TTS 风格参数与试听文案池 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
-| `python -m tests.official_smoke` | 73 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且音频被下载存档（V0.2.2：优先 voice_wav_url））** |
-| `python -m tests.multibot_smoke` | 38 | 两个官方机器人 + 两个角色互不串台 |
+| `python -m tests.smoke_test` | 279 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / 生图风格按角色人设自动匹配（二次元关键词→动漫风、写实关键词→写实风、无特征不强加、全局开关覆盖）/ TTS 风格参数与试听文案池 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ 全量群消息 @ 判定单元（`<@AppID>` 占位 / `mentions[].id` / @ 别的机器人 / 无 @ / @ 事件恒真）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
+| `python -m tests.official_smoke` | 78 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且音频被下载存档（V0.2.2：优先 voice_wav_url））** + **全量群消息段（GROUP_MESSAGE_CREATE：@ 自己才回 / @ 别的机器人让路 / 普通消息按开关 / 同一 msg_id 重复推送只回一次）** |
+| `python -m tests.multibot_smoke` | 43 | 两个官方机器人 + 两个角色互不串台 + **多机器人群：@ 谁谁回答（同一条全量群消息推到两个平台，只有被 @ 的回复；普通群消息都回）** |
 | `python -m tests.onboarding_smoke` | 88 | 6 步配置引导（含步骤标题 `EXPECTED_HEADS`；含**汇总页隐藏「取消引导」/ LLM 密钥留空也能「完成」不 KeyError**） |
-| `python -m tests.gui_smoke` | 149 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
+| `python -m tests.gui_smoke` | 153 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口/生图风格选项）**、**对话页媒体显示（图片消息渲染缩略图 / 语音消息渲染播放徽标 + 转写文字 / 选中后按钮可用）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
 | `python -m tests.scheduler_live` | 14 | 定时触发"真实到点"慢速自检 |
 | `python -m tests.frozen_smoke` | 0 / 34 | **打包产物**（无产物时自动跳过 0 项；产物齐备时 34 项，`--force` 强制） |
 | `python -m tests.installer_smoke` | 56 / 63 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 + **更新系统（版本比较/附件挑选/SHA256/下载进度/启动限流/静默拉起，本地 HTTP 模拟 GitHub，无外网依赖）** + **V0.2.2 多线程分段下载（大文件 Range 分段与完整覆盖、plan_ranges 切分）**（无产物 56 项；有产物 63 项） |
@@ -797,6 +797,36 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
 44. **定时触发 jitter 写错单位（900 秒 ≠ 90 秒）**：CronTrigger 的 `jitter` 单位是
       秒；多机器人重构时把 90 写成 900（迟到最多 15 分钟），`scheduler_live` 的
       210 秒等待窗口抓不到。改配置数值前先确认单位与测试等待窗口的匹配。
+45. **多机器人群里「@ 一个、所有机器人都答」（V0.2.2 全量群消息引入）**：
+    - **症状**：用户开了官方平台的「接收所有消息」（全量模式）后，同一个群里的多个
+      机器人都会收到群里**每条**消息（`GROUP_MESSAGE_CREATE`），之前只要 content 里
+      出现任何 `<@...>` 占位（哪怕是 @ 的另一个机器人）就被当成 @ 了自己 → 集体抢答。
+    - **平台事实**（bot.q.qq.com 文档 + 真实网关抓包）：全量事件 content 保留
+      `<@机器人标识>` 标记；`mentions` 是「消息中 @ 的用户列表」（User 对象，`id` /
+      `bot: bool`），@ 机器人事件本身不含机器人自身；官方文档明确「相同 msg_id 可能
+      重复推送，开发者需结合 msg_id 做去重」（@ 事件与全量事件可能同时收到同一条，
+      不去重会回两遍）。
+    - **修法**：`receiver.parse_event` 对全量事件精确匹配 `<@!?(AppID|user_id)>` 占位
+      与 `mentions[].id`（本机器人全部已知身份，`_bot_identities`），新增
+      `any_mentioned` 标志；`_should_reply` 里「没 @ 自己但 @ 了别人」直接让路
+      （debug 日志：群消息 @ 了别人（不是本机器人），忽略）；`OfficialReceiver.handle`
+      按 msg_id 做 5 分钟 TTL 去重。mock 侧：`emit_group` 支持 `event_type` /
+      `mention_appid`（模拟全量模式 + 被 @ 的 AppID），`MockProcess(app_id=...)` 让
+      两个 mock 平台代表两个不同机器人应用（token 端点按实例 AppID 校验）。
+    - **真机注意**：真机上 @ 占位里到底是 AppID 还是 user_id 以实际抓包为准，
+      代码两种身份都匹配，若还有出入看 `receiver` 的 debug 日志。
+46. **`QLabel` 没有 `setIcon`（V0.2.2 对话页媒体徽标引入）**：`QIcon` 的 set 方法只在
+    `QAbstractButton` 系（QPushButton/QToolButton）上有；给 QLabel 挂图标要
+    `label.setPixmap(icon.pixmap(QSize(w, h)))`。当时语音徽标用 `badge.setIcon(...)`
+    在运行到该消息才炸（slot 异常被 gui_smoke 的「未处理异常」巡检抓到），且炸在
+    `_load_messages._ok` 的填充循环中间 → 表格留下**有行没 item** 的中间态
+    （`item(r, 0)` 为 None 的崩溃就是它）。教训：表格填充循环里任何一步抛异常都会
+    留下半填充状态，`_ok` 里的 widget 构造代码要按「可能抛」对待；gui_smoke 的
+    「界面槽函数没有未处理异常」检查对这类运行期错误是唯一保险。
+47. **mock 的 test.png IDAT 块 CRC 是错的**：手写的 1x1 PNG 字节里 IDAT 的 CRC 校验
+    不对（PIL 能容忍、Qt 会报 `libpng error: IDAT: incorrect data check` 并可能解出
+    空 pixmap）。已用 `zlib.crc32` 重新生成常量并验证。凡是往 mock 里塞二进制附件，
+    都要用 PIL / Qt 双端验一遍解码。
 
 ---
 
@@ -815,13 +845,17 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
 **待办 / 可做**
 
 - [ ] **V0.2.2 真机验证 + 发布**（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理
-  已在 mock 全链验证（692 项自检全绿），待用户真实 QQ 验证 → 打包 →
+  + 3 项新修复（多机器人群 @ 只回被 @ 的 / 对话列表直接显示图片缩略图与语音播放徽标 /
+  生图前按角色人设匹配二次元或写实风格）已在 mock 全链验证，待用户真实 QQ 验证 → 打包 →
   `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`（安装包 + SHA256SUMS.txt）。
-  真机重点看：**多机器人不再同时发同样的主动消息**、**群消息 @/不 @ 都按开关响应**、
-  **机器人 2 的 AppID/Secret 保存后仍在**、**更新下载速度（多线程）**、**更新后自动拉起新版**、
+  真机重点看：**多机器人不再同时发同样的主动消息**、**多机器人群里 @ 谁谁回答（其他机器人不抢话）**、
+  **群消息 @/不 @ 都按开关响应**、**机器人 2 的 AppID/Secret 保存后仍在**、
+  **更新下载速度（多线程）**、**更新后自动拉起新版**、**对话页图片缩略图点击可看 / 语音徽标点击可播**、
+  **二次元角色发图是动漫风、真实风格角色发图是照片风**、
   **对话页按月/按天筛选与语音回放**、**15 天以上老对话不进上下文但可查**（压缩摘要生效）。
   历史坑：坑 41（APScheduler 协程静默丢失）/ 坑 42（ASC+LIMIT 截断最新消息）/
-  坑 43（Accept-Ranges 判定）/ 坑 44（jitter 单位）。
+  坑 43（Accept-Ranges 判定）/ 坑 44（jitter 单位）/ 坑 45（全量群消息多机器人全回）/
+  坑 46（QLabel 没有 setIcon）。
 - [x] **V0.2 真机验证 + 发布**（已完成）：用户真实 QQ 验证通过 → 打包 → `main` 合入 V0.2、tag `v0.2`、GitHub Release `v0.2`（安装包 + SHA256SUMS.txt）已上传，自动更新链路生效。历史坑见坑 40（CI 首跑 gui 自检 exit code 1 的双层根因与修法）。
   「听语音」零配置（官方平台参考转写），真机重点确认**有参考转写时角色能听懂**（已验证过一次：
   11:05 语音消息日志里出现参考转写并正常回复）；「[IMG] 发图」用 Gemini 时选**原生接口预设**

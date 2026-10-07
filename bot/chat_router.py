@@ -37,7 +37,8 @@ class IncomingMessage:
     is_group: bool = False
     group_id: str = ""                # 群 openid
     self_id: str = ""
-    mentioned: bool = True            # 群消息是否 @ 了机器人（私聊恒为 True）
+    mentioned: bool = True            # 群消息是否 @ 了**本机器人**（私聊恒为 True）
+    any_mentioned: bool = False       # 群消息里有没有 @ 任何人（@ 了别人时本机器人在群里让路）
     message_id: str = ""              # 被动回复要用的消息 id（官方平台必需）
     source: str = "official"          # 事件来源（官方平台）
     session_key: str = ""

@@ -97,6 +97,102 @@ def _diffusion_extra_body(size: str) -> Dict[str, Any]:
     return extra
 
 
+# ================================================================ 画面风格
+# 角色是人设，画出来的图却常常是「真人照片」风格——和二次元角色完全不符。
+# 生图前先读一遍角色设定，识别出角色属于二次元还是真实风格，把风格写进
+# 绘图提示词；识别不出来就不加（保持模型自己的判断）。
+#
+# 全局兜底/强制开关：config.yaml 的 ``media.image_style``
+#   auto（默认）= 按角色自动识别；anime = 强制二次元；
+#   realistic = 强制写实；off = 不加风格词。
+
+STYLE_ANIME = "anime"
+STYLE_REALISTIC = "realistic"
+
+_ANIME_KEYWORDS = (
+    "二次元", "动漫", "漫画", "日漫", "国漫", "轻小说", "acg", "萌", "萌娘",
+    "傲娇", "病娇", "傲娇", "天然呆", "魔法少女", "魔法", "魔力", "魔导",
+    "巫女", "术式", "异世界", "转生", "勇者", "魔王", "精灵", "兽耳",
+    "猫耳", "兔耳", "狐耳", "龙角", "翅膀", "天使", "恶魔", "神明",
+    "剑士", "法师", "圣骑士", "冒险者", "召唤", "契约", "轮回",
+    "祭典", "樱花", "神社", "和服", "jk", "洛丽塔", "手办", "粘土人",
+    "q版", "立绘", "卡面", "虚拟主播", "vtuber", "虚拟偶像", "偶像",
+    "声优", "中二", "大小姐", "学姐", "学妹", "同桌", "放学后",
+    "双马尾", "插画", "手绘", "赛璐璐", "像素", "游戏角色", "游戏cg",
+    "修仙", "仙侠", "奇幻", "后宫",
+)
+
+_REAL_KEYWORDS = (
+    "写实", "真实感", "真人", "照片", "摄影", "写真", "摄影作品",
+    "胶片", "单反", "微单", "镜头", "人像摄影", "生活照", "纪实",
+    "老照片", "黑白照片", "街拍", "都市", "职场", "商务", "西装",
+    "通勤", "地铁", "旅拍", "风景照", "景点", "海边", "沙滩",
+    "自然光", "逆光", "黄金时刻", "景深", "大光圈", "虚化",
+    "85mm", "50mm", "35mm", "全画幅", "iso", "快门", "光圈",
+    "曝光", "白平衡", "色温", "胶片感", "ccd", "手机拍照",
+    "随手拍", "自拍", "合照", "婚纱照", "婚纱", "证件照",
+    "模特", "超模", "走秀", "t台", "时尚", "穿搭", "高定",
+    "杂志", "画报", "演员", "明星", "电影剧照", "电视剧",
+)
+
+_ANIME_CLAUSE = "，画面风格：二次元动漫风格，日系动漫插画，赛璐璐上色，线条干净"
+_REAL_CLAUSE = "，画面风格：写实摄影风格，真实照片质感，自然光影，细节真实"
+
+
+def detect_character_style(character: Optional[Dict[str, Any]]) -> str:
+    """按角色设定识别画面风格：返回 ``anime`` / ``realistic`` / ``""``。
+
+    把角色的名称 / 描述 / 性格 / 场景 / 系统指令拼起来打分：
+    哪一类关键词命中多就算哪一类；两边都没命中或打平就返回 ``""``
+    （不强加风格，交给模型）。
+    """
+    if not isinstance(character, dict) or not character:
+        return ""
+    text = " ".join(
+        str(character.get(key) or "")
+        for key in ("name", "description", "personality", "scenario", "system_prompt")
+    ).lower()
+    if not text.strip():
+        return ""
+    anime_score = sum(text.count(keyword) for keyword in _ANIME_KEYWORDS)
+    real_score = sum(text.count(keyword) for keyword in _REAL_KEYWORDS)
+    if anime_score > real_score:
+        return STYLE_ANIME
+    if real_score > anime_score:
+        return STYLE_REALISTIC
+    return ""
+
+
+def style_clause(style: str) -> str:
+    """风格标识 → 追加到绘图描述末尾的风格短语（未知/空标识返回空串）。"""
+    if style == STYLE_ANIME:
+        return _ANIME_CLAUSE
+    if style == STYLE_REALISTIC:
+        return _REAL_CLAUSE
+    return ""
+
+
+def image_prompt_with_style(
+    prompt: str, character: Optional[Dict[str, Any]], override: str = "auto"
+) -> Tuple[str, str]:
+    """给绘图描述加上与角色匹配的风格，返回 ``(最终提示词, 生效的风格标识)``。
+
+    ``override``：``auto`` 按角色自动识别（默认）；``anime`` / ``realistic``
+    强制指定；``off`` 不加风格词。
+    """
+    prompt = (prompt or "").strip()
+    style = ""
+    if override in (STYLE_ANIME, STYLE_REALISTIC):
+        style = override
+    elif override == "off":
+        style = ""
+    else:  # auto / 未知值
+        style = detect_character_style(character)
+    if style:
+        prompt = prompt + style_clause(style)
+    return prompt, style
+
+
 def _ext_from_mime(url_or_mime: str) -> str:
     """从 data URL / MIME 类型 / 文件后缀里猜图片扩展名。"""
     lower = str(url_or_mime or "").lower()
