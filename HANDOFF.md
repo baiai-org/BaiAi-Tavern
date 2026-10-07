@@ -96,7 +96,7 @@
 | 协议 | Apache-2.0（`LICENSE`，第三方清单见 `NOTICE`） |
 | CI | `.github/workflows/ci.yml`（Windows runner：pyflakes + 6 套自检；`workflow_dispatch` 时额外打包并跑 frozen 自检） |
 | 发布 | `main` = V0.2.1（tag `v0.2.1`）；线上 Releases：`v0.2.1`（当前）/ `v0.2` / `v0.1`（历史），均含安装包 + `SHA256SUMS.txt`。V0.2.2 待发布（分支 `v0.2.2`） |
-| 产物 | `dist\BaiAi-Tavern V0.2.2.exe`（安装包）、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
+| 产物 | `dist\BaiAi-Tavern V0.2.2.exe`（安装包，2026-10-08 重打包含 3 项新修复）、无空格发布副本 `dist\BaiAi-Tavern-V0.2.2.exe` + `dist\SHA256SUMS.txt`、`dist\BaiAi-Tavern\`（绿色版）、`dist\BaiAi-Tavern.exe`、`dist\bot.exe` |
 | 图标 | 全部由 `scripts/make_icons.py` + `app/uikit.py` 绘制，`resources/icons/*.ico` 是产物 |
 
 **发新版本流程**
@@ -846,8 +846,12 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
 
 - [ ] **V0.2.2 真机验证 + 发布**（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理
   + 3 项新修复（多机器人群 @ 只回被 @ 的 / 对话列表直接显示图片缩略图与语音播放徽标 /
-  生图前按角色人设匹配二次元或写实风格）已在 mock 全链验证，待用户真实 QQ 验证 → 打包 →
-  `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`（安装包 + SHA256SUMS.txt）。
+  生图前按角色人设匹配二次元或写实风格）已在 mock 全链验证，待用户真实 QQ 验证 →
+  `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`。
+  打包产物已就绪（2026-10-08）：`dist\BaiAi-Tavern V0.2.2.exe` + 无空格发布副本
+  `dist\BaiAi-Tavern-V0.2.2.exe`（SHA256 `D6F82183082966237F21A2CFCA42D1FC3DB6F12955F73E10D551276082479991`，
+  见 `dist\SHA256SUMS.txt`）+ 绿色版 `dist\BaiAi-Tavern\`。上传 Release 用无空格副本 +
+  SHA256SUMS.txt（octet-stream + `?name=`，见坑 10）。
   真机重点看：**多机器人不再同时发同样的主动消息**、**多机器人群里 @ 谁谁回答（其他机器人不抢话）**、
   **群消息 @/不 @ 都按开关响应**、**机器人 2 的 AppID/Secret 保存后仍在**、
   **更新下载速度（多线程）**、**更新后自动拉起新版**、**对话页图片缩略图点击可看 / 语音徽标点击可播**、
