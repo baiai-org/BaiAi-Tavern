@@ -2057,6 +2057,45 @@ def phase_unit_logic(c: Checker) -> None:
     _styled4, _style4 = image_prompt_with_style("一只猫", _anime_char, "off")
     c.check("全局开关 off 时不追加风格短语", _style4 == "" and _styled4 == "一只猫", "style=%r" % _style4)
 
+    # V0.2.2 第五批：自定义风格关键词 + 角色本人参考段
+    _styled5, _style5 = image_prompt_with_style(
+        "一只在窗边喝茶的猫", _anime_char, "custom", "吉卜力风格，水彩质感"
+    )
+    c.check(
+        "custom 风格：用户自定义关键词拼进绘图描述",
+        _style5 == "custom" and _styled5.endswith("，画面风格：吉卜力风格，水彩质感"),
+        "style=%r prompt=%r" % (_style5, _styled5[:100]),
+    )
+    _styled6, _style6 = image_prompt_with_style("一只在窗边喝茶的猫", _anime_char, "custom", "   ")
+    c.check(
+        "custom 但没填关键词时回落自动识别",
+        _style6 == "anime" and "二次元动漫风格" in _styled6,
+        "style=%r prompt=%r" % (_style6, _styled6[:80]),
+    )
+    from bot.media.images import character_reference_clause
+
+    _with_char = {
+        "name": "苏苏",
+        "description": "粉色长发，水手服，眼睛是琥珀色的，总戴一顶针织帽。",
+        "personality": "软萌、爱撒娇、怕黑",
+    }
+    _ref = character_reference_clause(_with_char)
+    c.check(
+        "角色本人参考段：带人设描述与性格，并说明画面无关时不强加",
+        "苏苏" in _ref
+        and "粉色长发" in _ref
+        and "软萌" in _ref
+        and "不要强行加入" in _ref,
+        _ref[:120],
+    )
+    _ref2 = character_reference_clause({"name": "只写名字", "description": "", "personality": ""})
+    c.check("角色卡没有描述/性格时不加参考段（避免稀释提示词）", _ref2 == "", repr(_ref2))
+    _ref3 = character_reference_clause(None)
+    c.check("没有角色信息时不加参考段", _ref3 == "", repr(_ref3))
+    _long_desc = "长" * 300
+    _ref4 = character_reference_clause({"name": "测试", "description": _long_desc, "personality": ""})
+    c.check("参考段里的描述会被截断（不把整段人设灌进绘图提示词）", len(_ref4) < 300, "len=%d" % len(_ref4))
+
     # ---------------------------------------------------------- TTS 风格参数
     from common.providers import ENGINE_EDGE_TTS
 

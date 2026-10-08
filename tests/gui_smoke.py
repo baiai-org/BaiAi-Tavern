@@ -949,11 +949,14 @@ def main() -> int:
             ),
         )
         checker.check(
-            "富媒体行为已搬到消息设置页（语音概率 / 上限 / 保留天数）",
+            "富媒体行为已搬到消息设置页（语音概率 / 上限 / 保留天数 / 生图风格含自定义）",
             proactive_page.prob_voice is not None
             and proactive_page.spin_voice_max is not None
             and proactive_page.spin_temp_days is not None
-            and proactive_page.chk_media_enabled is not None,
+            and proactive_page.chk_media_enabled is not None
+            and proactive_page.combo_image_style is not None
+            and proactive_page.combo_image_style.count() == 5
+            and proactive_page.edit_style_custom is not None,
             "",
         )
         proactive_page.spin_global.setValue(8)
@@ -1765,12 +1768,62 @@ def main() -> int:
             and hasattr(bots_page.qq_form, "in_app_id"),
         )
         checker.check(
-            "机器人页带「生图风格」按机器人设置（auto/anime/realistic/off）",
+            "机器人页带「生图风格」按机器人设置（auto/anime/realistic/custom/off）",
             hasattr(bots_page, "combo_image_style")
-            and bots_page.combo_image_style.count() == 4
+            and bots_page.combo_image_style.count() == 5
             and bots_page.combo_image_style.currentIndex() == 0,
             str(getattr(bots_page, "combo_image_style", None)),
         )
+        checker.check(
+            "生图风格选「自定义」时才显示风格关键词输入框",
+            hasattr(bots_page, "edit_style_custom") and not bots_page.edit_style_custom.isVisible(),
+            "",
+        )
+        if hasattr(bots_page, "combo_image_style") and hasattr(bots_page, "edit_style_custom"):
+            # 前面的「测试连接 / 重新连接」会先保存再 refresh()（异步重渲染），
+            # 必须等 load_bots 结束，否则表单中途被重渲染会把下拉重置成 auto
+            wait_until(app, lambda: not context.runner.is_busy("load_bots"), timeout=20)
+            pump(app, 0.3)
+            bots_page.combo_image_style.setCurrentIndex(3)  # 信号同步触发，无需 pump
+            checker.check(
+                "切到 custom 后关键词输入框出现",
+                bots_page.edit_style_custom.isVisible(),
+                "",
+            )
+            # 端到端：custom + 关键词保存进配置（第 1 个机器人 = qq 段的 media 覆盖）
+            bots_page.edit_style_custom.setText("吉卜力风格，水彩质感")
+            bots_page._save()
+
+            def _custom_saved() -> bool:
+                try:
+                    media_entry = (bots_page.ctx.config.get("qq", {}) or {}).get("media") or {}
+                    return (
+                        media_entry.get("image_style") == "custom"
+                        and media_entry.get("image_style_custom") == "吉卜力风格，水彩质感"
+                    )
+                except Exception:
+                    return False
+
+            checker.check(
+                "custom 风格与自定义关键词能保存进配置（按机器人覆盖）",
+                wait_until(app, _custom_saved, timeout=60),
+                str((bots_page.ctx.config.get("qq", {}) or {}).get("media")),
+            )
+            # 还原回 auto，避免影响后面的机器人页用例
+            bots_page.combo_image_style.setCurrentIndex(0)
+            bots_page.edit_style_custom.setText("")
+            pump(app, 0.1)
+            bots_page._save()
+
+            def _custom_restored() -> bool:
+                try:
+                    media_entry = (bots_page.ctx.config.get("qq", {}) or {}).get("media") or {}
+                    return media_entry.get("image_style") == "auto"
+                except Exception:
+                    return False
+
+            wait_until(app, _custom_restored, timeout=60)
+            pump(app, 0.3)
 
         def bot_names() -> List[str]:
             return [

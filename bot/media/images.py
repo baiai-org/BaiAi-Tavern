@@ -102,12 +102,14 @@ def _diffusion_extra_body(size: str) -> Dict[str, Any]:
 # 生图前先读一遍角色设定，识别出角色属于二次元还是真实风格，把风格写进
 # 绘图提示词；识别不出来就不加（保持模型自己的判断）。
 #
-# 全局兜底/强制开关：config.yaml 的 ``media.image_style``
+# 全局兜底/强制开关：config.yaml 的 ``media.image_style``（可按机器人覆盖）
 #   auto（默认）= 按角色自动识别；anime = 强制二次元；
-#   realistic = 强制写实；off = 不加风格词。
+#   realistic = 强制写实；custom = 用 ``media.image_style_custom`` 里
+#   用户自己写的风格关键词；off = 不加风格词。
 
 STYLE_ANIME = "anime"
 STYLE_REALISTIC = "realistic"
+STYLE_CUSTOM = "custom"
 
 _ANIME_KEYWORDS = (
     "二次元", "动漫", "漫画", "日漫", "国漫", "轻小说", "acg", "萌", "萌娘",
@@ -163,33 +165,85 @@ def detect_character_style(character: Optional[Dict[str, Any]]) -> str:
     return ""
 
 
-def style_clause(style: str) -> str:
-    """风格标识 → 追加到绘图描述末尾的风格短语（未知/空标识返回空串）。"""
+def style_clause(style: str, custom_keywords: str = "") -> str:
+    """风格标识 → 追加到绘图描述末尾的风格短语（未知/空标识返回空串）。
+
+    ``custom``：直接用用户自己写的风格关键词；没写关键词时返回空串
+    （调用方会回落到自动识别）。
+    """
     if style == STYLE_ANIME:
         return _ANIME_CLAUSE
     if style == STYLE_REALISTIC:
         return _REAL_CLAUSE
+    if style == STYLE_CUSTOM:
+        keywords = (custom_keywords or "").strip()
+        if not keywords:
+            return ""
+        return "，画面风格：%s" % keywords
     return ""
 
 
+def character_reference_clause(character: Optional[Dict[str, Any]]) -> str:
+    """角色参考段：画面里要画**角色本人**时，按角色卡的描述与性格生成人物。
+
+    返回追加到绘图描述末尾的条件句（画面无关该角色时不强行加入）；
+    角色卡没有描述/性格时返回空串（没有可参考的信息就不加，避免稀释提示词）。
+    """
+    if not isinstance(character, dict) or not character:
+        return ""
+    name = str(character.get("name") or "").strip()
+    description = " ".join(str(character.get("description") or "").split())
+    personality = " ".join(str(character.get("personality") or "").split())
+    if not description and not personality:
+        return ""
+    description = _truncate(description, 120)
+    personality = _truncate(personality, 60)
+    who = "「%s」" % name if name else "该角色"
+    parts = []
+    if description:
+        parts.append(description)
+    if personality:
+        parts.append("性格：%s" % personality)
+    return (
+        "；角色参考：若画面中需要画出%s这个人物本身，其外貌、气质、穿着须符合——%s；"
+        "若画面内容与该角色无关，则不要强行加入。" % (who, "；".join(parts))
+    )
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
 def image_prompt_with_style(
-    prompt: str, character: Optional[Dict[str, Any]], override: str = "auto"
+    prompt: str,
+    character: Optional[Dict[str, Any]],
+    override: str = "auto",
+    custom_keywords: str = "",
 ) -> Tuple[str, str]:
     """给绘图描述加上与角色匹配的风格，返回 ``(最终提示词, 生效的风格标识)``。
 
     ``override``：``auto`` 按角色自动识别（默认）；``anime`` / ``realistic``
-    强制指定；``off`` 不加风格词。
+    强制指定；``custom`` 用 ``custom_keywords`` 里用户自己写的风格关键词
+    （关键词为空时回落自动识别）；``off`` 不加风格词。
     """
     prompt = (prompt or "").strip()
     style = ""
     if override in (STYLE_ANIME, STYLE_REALISTIC):
         style = override
+    elif override == STYLE_CUSTOM:
+        if (custom_keywords or "").strip():
+            style = STYLE_CUSTOM
+        else:  # 选了自定义但没填关键词：回落自动识别
+            style = detect_character_style(character)
     elif override == "off":
         style = ""
     else:  # auto / 未知值
         style = detect_character_style(character)
     if style:
-        prompt = prompt + style_clause(style)
+        prompt = prompt + style_clause(style, custom_keywords)
     return prompt, style
 
 

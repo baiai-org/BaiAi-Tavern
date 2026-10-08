@@ -124,6 +124,9 @@ DEFAULTS: Dict[str, Any] = {
         "voice_max_chars": 180,        # 单条语音对应的文字上限，超过会拆成多条语音
         "image_marker": "[IMG]",       # 角色想发图时写在回复里的标记（后跟绘图描述）
         "temp_days": 3,                # 收发的临时媒体文件保留天数
+        # 生图风格：auto（按角色人设自动匹配，默认）/ anime / realistic / custom / off
+        "image_style": "auto",
+        "image_style_custom": "",      # image_style=custom 时用户自己写的风格关键词
     },
     # 机器人列表：第 1 个机器人就是下面的 qq: 段，第 2..N 个写在这里
     # （每一项与 qq: 段同构，可以各自绑定不同的角色）

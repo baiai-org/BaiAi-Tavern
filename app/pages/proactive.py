@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QSpinBox,
     QTimeEdit,
     QVBoxLayout,
@@ -261,6 +262,21 @@ class ProactivePage(Page):
         self.chk_media_enabled.setChecked(True)
         self.chk_allow_image = QCheckBox("允许角色给你发图（回复里出现 [IMG] 描述时自动生图）")
         self.chk_allow_image.setChecked(True)
+        self.combo_image_style = QComboBox(media)
+        self.combo_image_style.setMinimumWidth(260)
+        self.combo_image_style.addItems(
+            [
+                "auto（自动：按人设匹配，二次元出动漫风、真实角色出写实风）",
+                "anime（动漫风）",
+                "realistic（写实照片风）",
+                "custom（自定义：自己写风格关键词）",
+                "off（不附加风格）",
+            ]
+        )
+        self.edit_style_custom = QLineEdit(media)
+        self.edit_style_custom.setPlaceholderText("例如：吉卜力风格，水彩质感，柔和光影")
+        self.edit_style_custom.setVisible(False)
+        self.combo_image_style.currentIndexChanged.connect(self._sync_style_custom_visible)
         self.prob_voice = ProbabilityRow(0.05, media)
         self.spin_voice_max = QSpinBox(media)
         self.spin_voice_max.setRange(20, 500)
@@ -272,6 +288,20 @@ class ProactivePage(Page):
         self.spin_temp_days.setSuffix(" 天")
         media_form.addRow(self.chk_media_enabled)
         media_form.addRow(self.chk_allow_image)
+        add_form_row(
+            media_form,
+            "生图风格",
+            self.combo_image_style,
+            "角色回复里带 [IMG] 时生图用的画面风格；选某个机器人时为该机器人单独设置",
+            label_width=110,
+        )
+        add_form_row(
+            media_form,
+            "自定义风格关键词",
+            self.edit_style_custom,
+            "选「自定义」时生效：写你想让生图模型使用的画面风格关键词，直接拼进绘图描述",
+            label_width=110,
+        )
         add_form_row(
             media_form,
             "语音回复概率",
@@ -296,8 +326,8 @@ class ProactivePage(Page):
         )
         media_form.addRow(
             hint_label(
-                "生图风格（二次元 / 写实 / 自动按人设匹配）在「机器人」页里按机器人单独设置；"
-                "三条 API 线路（图像理解 / 图像生成 / 文字转语音）在「模型路由」页配置。"
+                "三条 API 线路（图像理解 / 图像生成 / 文字转语音）在「模型路由」页配置；"
+                "生图风格也可以在「机器人」页里按机器人单独设置（两处写的是同一项配置）。"
             )
         )
         layout.addWidget(media)
@@ -453,6 +483,14 @@ class ProactivePage(Page):
         media = self._effective_section("media")
         self.chk_media_enabled.setChecked(bool(media.get("enabled", True)))
         self.chk_allow_image.setChecked(bool(media.get("allow_image", True)))
+        _style = str(media.get("image_style") or "auto").lower()
+        self.combo_image_style.blockSignals(True)
+        self.combo_image_style.setCurrentIndex(
+            {"auto": 0, "anime": 1, "realistic": 2, "custom": 3, "off": 4}.get(_style, 0)
+        )
+        self.combo_image_style.blockSignals(False)
+        self.edit_style_custom.setText(str(media.get("image_style_custom") or ""))
+        self._sync_style_custom_visible()
         _prob = media.get("voice_reply_probability")
         self.prob_voice.set_value(float(_prob if _prob is not None else 0.05))
         self.spin_voice_max.setValue(int(media.get("voice_max_chars", 180) or 180))
@@ -495,10 +533,19 @@ class ProactivePage(Page):
         return {
             "enabled": self.chk_media_enabled.isChecked(),
             "allow_image": self.chk_allow_image.isChecked(),
+            "image_style": ("auto", "anime", "realistic", "custom", "off")[
+                max(0, self.combo_image_style.currentIndex())
+            ],
+            "image_style_custom": self.edit_style_custom.text().strip(),
             "voice_reply_probability": self.prob_voice.value(),
             "voice_max_chars": int(self.spin_voice_max.value()),
             "temp_days": int(self.spin_temp_days.value()),
         }
+
+    def _sync_style_custom_visible(self) -> None:
+        """生图风格下拉切到「自定义」时才显示关键词输入框。"""
+        if hasattr(self, "edit_style_custom"):
+            self.edit_style_custom.setVisible(self.combo_image_style.currentIndex() == 3)
 
     # ============================================================== 状态显示
     def on_status(self, snapshot: Dict[str, Any]) -> None:

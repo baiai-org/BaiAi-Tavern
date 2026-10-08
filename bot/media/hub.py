@@ -39,7 +39,7 @@ from common.providers import (
 )
 
 from . import store
-from .images import ImageError, ImageGenerator, image_prompt_with_style
+from .images import ImageError, ImageGenerator, character_reference_clause, image_prompt_with_style
 from .instruct import (
     generate_qwen_audio_tags,
     generate_tts_instruction,
@@ -261,6 +261,8 @@ class MediaHub:
                 "【发图】当你需要给对方看一张图时——对方让你画/发图，或你想用图表达"
                 "（风景、表情、你脑补的画面）——就在回复的最后一行写 %s <图里的内容描述>，"
                 "系统会自动把它画出来发过去（描述具体一点，两三句话）。"
+                "如果图里要出现你自己（对方要你的照片/自拍/立绘），描述里一定写上自己的"
+                "外貌与气质特征（系统会自动附带你的人设设定，画面会按人设生成你本人）。"
                 "只是普通聊天时不用加，别每条都发图。" % marker
             )
         return "\n".join(parts)
@@ -282,12 +284,20 @@ class MediaHub:
             spec = self._spec(SLOT_IMAGE)
             if spec.configured:
                 try:
-                    # 先按角色设定匹配画面风格（二次元角色 → 动漫风，真实角色 → 写实风），
-                    # 避免二次元角色画出来是真人照片；风格可按机器人在「机器人」页单独设置
+                    # 先按角色设定匹配画面风格（二次元角色 → 动漫风，真实角色 → 写实风，
+                    # 也可按机器人设成自定义关键词），避免二次元角色画出来是真人照片；
+                    # 风格在「机器人」页 / 「消息设置」页按机器人单独设置
                     override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
-                    image_prompt, style = image_prompt_with_style(image_prompt, character, override)
+                    custom_keywords = str(self._media_cfg("image_style_custom", "", section) or "").strip()
+                    image_prompt, style = image_prompt_with_style(
+                        image_prompt, character, override, custom_keywords
+                    )
                     if style:
-                        log.info("生图风格按角色设定识别为 %s（%s）", style, character.get("name"))
+                        log.info("生图风格：%s（%s）", style, character.get("name"))
+                    # 画面里要画角色本人时，按角色卡的描述与性格生成人物
+                    reference = character_reference_clause(character)
+                    if reference:
+                        image_prompt = image_prompt + reference
                     gen = ImageGenerator(spec)
                     data, ext = await gen.generate(image_prompt)
                     out.image_path = str(store.save_outbox(data, ext))

@@ -234,20 +234,34 @@ class BotsPage(Page):
         style_form.setContentsMargins(14, 18, 14, 14)
         self.combo_image_style = QComboBox(style)
         self.combo_image_style.addItems(
-            ["auto（自动：按人设匹配，二次元出动漫风、真实角色出写实风）", "anime（动漫风）", "realistic（写实照片风）", "off（不附加风格）"]
+            [
+                "auto（自动：按人设匹配，二次元出动漫风、真实角色出写实风）",
+                "anime（动漫风）",
+                "realistic（写实照片风）",
+                "custom（自定义：自己写风格关键词）",
+                "off（不附加风格）",
+            ]
         )
         # 回显该机器人的生效值：机器人自己设过的 → 全局 media.image_style → auto
         _style = ""
+        _custom_text = ""
         try:
             _media_entry = self._bot_media_entry(index, bot)
             _style = str(_media_entry.get("image_style") or "").lower()
-            if _style not in ("auto", "anime", "realistic", "off"):
+            if _style not in ("auto", "anime", "realistic", "custom", "off"):
                 _style = str(config.get("media.image_style") or "auto").lower()
-                if _style not in ("auto", "anime", "realistic", "off"):
+                if _style not in ("auto", "anime", "realistic", "custom", "off"):
                     _style = "auto"
+            _custom_text = str(
+                _media_entry.get("image_style_custom")
+                or config.get("media.image_style_custom")
+                or ""
+            )
         except Exception:  # pragma: no cover
             _style = "auto"
-        self.combo_image_style.setCurrentIndex({"auto": 0, "anime": 1, "realistic": 2, "off": 3}.get(_style, 0))
+        self.combo_image_style.setCurrentIndex(
+            {"auto": 0, "anime": 1, "realistic": 2, "custom": 3, "off": 4}.get(_style, 0)
+        )
         add_form_row(
             style_form,
             "角色发图风格",
@@ -255,6 +269,18 @@ class BotsPage(Page):
             "这个机器人回复里带 [IMG] 时生图用的画面风格；其他机器人的设置互不影响",
             label_width=110,
         )
+        self.edit_style_custom = QLineEdit(style)
+        self.edit_style_custom.setPlaceholderText("例如：吉卜力风格，水彩质感，柔和光影")
+        self.edit_style_custom.setVisible(self.combo_image_style.currentIndex() == 3)
+        self.combo_image_style.currentIndexChanged.connect(self._sync_style_custom_visible)
+        add_form_row(
+            style_form,
+            "自定义风格关键词",
+            self.edit_style_custom,
+            "选「自定义」时生效：写你想让生图模型使用的画面风格关键词，直接拼进绘图描述",
+            label_width=110,
+        )
+        self.edit_style_custom.setText(_custom_text)
         self.form_layout.addWidget(style)
 
         # ---------------------------------------------------------- 连接
@@ -285,6 +311,11 @@ class BotsPage(Page):
         self.form_layout.addWidget(self.lbl_detail_hint)
         self.form_layout.addStretch(1)
         self._update_detail_hint()
+
+    def _sync_style_custom_visible(self) -> None:
+        """生图风格下拉切到「自定义」时才显示关键词输入框。"""
+        if hasattr(self, "edit_style_custom"):
+            self.edit_style_custom.setVisible(self.combo_image_style.currentIndex() == 3)
 
     def _clear_layout(self, layout: Any) -> None:
         while layout.count():
@@ -374,12 +405,15 @@ class BotsPage(Page):
         values["character_name"] = (
             str(self.combo_character.currentText()) if character_id else ""
         )
-        # 生图风格按机器人单独存（覆盖全局 media.image_style）
+        # 生图风格按机器人单独存（覆盖全局 media.image_style / image_style_custom）
         if hasattr(self, "combo_image_style"):
             values["media"] = {
-                "image_style": ("auto", "anime", "realistic", "off")[
+                "image_style": ("auto", "anime", "realistic", "custom", "off")[
                     max(0, self.combo_image_style.currentIndex())
-                ]
+                ],
+                "image_style_custom": self.edit_style_custom.text().strip()
+                if hasattr(self, "edit_style_custom")
+                else "",
             }
         return values
 
