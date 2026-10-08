@@ -2205,23 +2205,34 @@ def phase_unit_logic(c: Checker) -> None:
     _fused_msgs = build_image_fuse_messages("画一张我的照片", _with_char)
     _fuse_sys = _fused_msgs[0]["content"]
     c.check(
-        "融合规则：只写风格+角色名+在干什么+表情（重点人物与画风，1~2 句）",
+        "融合规则：画风 + 角色名 + 关键外貌（来自角色卡）+ 在干什么 + 表情（2~3 句以内）",
         "日本动漫京阿尼画风" in _fuse_sys
         and "角色的名字" in _fuse_sys
+        and "关键外貌" in _fuse_sys
         and "在干什么" in _fuse_sys
         and "表情" in _fuse_sys
-        and "1~2 句" in _fuse_sys,
+        and "2~3 句" in _fuse_sys,
         _fuse_sys[:200],
     )
     c.check(
-        "融合规则：不写光线/服装外貌/环境摆件，不堆砌形容词",
-        "不写光线" in _fuse_sys
-        and "不写服装" in _fuse_sys
+        "融合规则：人物设定不得更改省略 + 角色卡没写的不编造 + 不写光线/环境摆件",
+        "不得更改" in _fuse_sys
+        and "不得省略" in _fuse_sys
+        and "不要编造" in _fuse_sys
+        and "不写光线" in _fuse_sys
         and "不写环境和摆件" in _fuse_sys
-        and "不堆砌形容词" in _fuse_sys
         and "粉色长发" in _fused_msgs[1]["content"]
         and "画一张我的照片" in _fused_msgs[1]["content"],
         _fuse_sys[:300],
+    )
+    # 完整角色卡发给主模型（主模型负责提取关键信息给生图模型，系统不截断）
+    _long_desc = "五更琉璃，家里蹲黑客少女，长发。" * 60
+    _long_char = {"name": "五更琉璃", "description": _long_desc, "personality": "内向"}
+    _long_msgs = build_image_fuse_messages("画一张我的照片", _long_char)
+    c.check(
+        "融合消息：角色卡描述全量发给主模型（关键信息由主模型提取，系统不截断）",
+        _long_desc in _long_msgs[1]["content"],
+        "user_len=%d" % len(_long_msgs[1]["content"]),
     )
     _fused_msgs2 = build_image_fuse_messages(
         "画一张我的照片", _with_char, style_text="，画面风格：吉卜力风格，水彩质感"
