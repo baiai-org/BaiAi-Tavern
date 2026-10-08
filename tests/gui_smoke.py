@@ -1106,12 +1106,15 @@ def main() -> int:
             conversations_page.refresh()
 
             def _has_media_row() -> bool:
+                # 图片与语音都要等到（语音入库更慢：要先下载音频存档，
+                # 只看图片行会让语音行还没入库就提前退出 → 偶发 voice_row=-1）
                 t = conversations_page.message_table
+                kinds = set()
                 for r in range(t.rowCount()):
                     time_item = t.item(r, 0)
-                    if time_item is not None and t.item(r, 0).data(Qt.UserRole + 1) in ("image", "voice"):
-                        return True
-                return False
+                    if time_item is not None:
+                        kinds.add(str(time_item.data(Qt.UserRole + 1) or ""))
+                return "image" in kinds and "voice" in kinds
 
             media_loaded = wait_until(app, _has_media_row, timeout=25)
             if media_loaded:
@@ -1178,6 +1181,22 @@ def main() -> int:
                     settled and conversations_page.btn_view_media.isEnabled(),
                     "settled=%s row=%d rows=%d" % (settled, target, table.rowCount()),
                 )
+                # V0.2.2 回归：用户点「角色」列的格子时，旧表格只选中单个
+                # item（没设 SelectRows），selectedRows() 取不到行 → 按钮一直灰
+                from PySide6.QtCore import QItemSelectionModel as _QISM
+
+                _model = table.selectionModel()
+                if _model is not None:
+                    _model.select(
+                        table.model().index(target, 1),
+                        _QISM.SelectionFlag.ClearAndSelect,
+                    )
+                    pump(app, 0.2)
+                    checker.check(
+                        "点「角色」列的格子同样能启用「查看 / 播放」按钮",
+                        conversations_page.btn_view_media.isEnabled(),
+                        "row=%d" % target,
+                    )
                 # V0.2.2 修复：setCellWidget 的缩略图/徽标此前吃掉鼠标事件、
                 # 点了没反应。现在容器自己响应左键 —— 用真实鼠标点击验证
                 from PySide6.QtTest import QTest as _QTest

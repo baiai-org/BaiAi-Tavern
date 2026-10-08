@@ -133,6 +133,7 @@ class ConversationsPage(Page):
         self.message_table.setHorizontalHeaderLabels(["时间", "角色", "内容"])
         self.message_table.verticalHeader().setVisible(False)
         self.message_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.message_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.message_table.setWordWrap(True)
         self.message_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.message_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -201,17 +202,19 @@ class ConversationsPage(Page):
     # ========================================================== 媒体查看（V0.2.2）
     def _selected_media_row(self) -> Optional[Dict[str, str]]:
         model = self.message_table.selectionModel()
-        rows = model.selectedRows() if model else []
-        if not rows:
+        if not model:
             return None
-        row = rows[0].row()
-        time_item = self.message_table.item(row, 0)
-        if time_item is None:
-            return None
-        kind = str(time_item.data(Qt.UserRole + 1) or "text")
-        media_path = str(time_item.data(Qt.UserRole + 2) or "")
-        if kind in ("image", "voice") and media_path:
-            return {"kind": kind, "path": media_path}
+        # 遍历所有选中行（而不是只看第 0 列的 selectedRows）：
+        # 用户点中「角色」列的单个 item 时同样能找到该行媒体
+        rows = sorted({index.row() for index in model.selectedIndexes()})
+        for row in rows:
+            time_item = self.message_table.item(row, 0)
+            if time_item is None:
+                continue
+            kind = str(time_item.data(Qt.UserRole + 1) or "text")
+            media_path = str(time_item.data(Qt.UserRole + 2) or "")
+            if kind in ("image", "voice") and media_path:
+                return {"kind": kind, "path": media_path}
         return None
 
     def _on_message_selected(self) -> None:

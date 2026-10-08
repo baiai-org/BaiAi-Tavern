@@ -864,6 +864,25 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
     自检 210 秒等不到消息。修法：目标时间改 `now+2 分钟`、`WAIT_SECONDS`
     210→300。教训：涉及「等调度器到点」的测试，目标时间必须给进程启动留足
     缓冲；APScheduler 装任务时若 cron 槽位已过就等下一轮，不会补发。
+51. **桌面快捷方式「有时候创建不出来」（V0.2.2 用户反馈，双因）**：
+    a) 桌面被迁移到 OneDrive 的机器（Win11 家庭版常见），真实桌面在
+    `%USERPROFILE%\OneDrive\Desktop`，而安装器硬编码 `%USERPROFILE%\Desktop`
+    ——快捷方式写进了不显示的目录，桌面上一片空白。修法：`desktop_dir()` /
+    `startmenu_dir()` 改读 `HKCU\...\Explorer\User Shell Folders` 的
+    `Desktop` / `Start Menu` 值并展开环境变量（Known Folders 用户覆盖），
+    读不到才回落原路径。b) `create_shortcut` 的 COM 失败兜底（二进制写
+    .lnk）之后用 WScript.Shell 读回验证，杀软把 COM 读回也拦住时，
+    刚写好的好文件被当成坏文件删掉 → 彻底没快捷方式。修法：读回失败时
+    改验文件头魔数（`_lnk_looks_valid`：尺寸 0x4C + CLSID），完好就保留。
+    另外安装结果现在带 `shortcut_methods`（com/binary/failed），GUI 完成
+    弹窗与静默日志都会写明，真机再出问题一眼定位。
+52. **QTableWidget 没设 SelectRows 时，点非 0 列只选中单个 item**：
+    对话页「查看选中消息的图片 / 播放语音」按钮依赖 `selectedRows()`
+    （默认第 0 列）取行，用户点「角色」列的格子 → 只有 (行,1) 被选中 →
+    取不到行 → 按钮一直灰着（「按钮不起作用」，真机反馈）。修法：消息表
+    `setSelectionBehavior(SelectRows)` + `_selected_media_row()` 改遍历
+    全部选中索引按行找媒体（双保险）。教训：表格凡是「按行取数据」的
+    逻辑，要么强制 SelectRows，要么别依赖 `selectedRows()` 的默认列。
 
 ---
 
@@ -888,11 +907,14 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
   切换设置 / 富媒体行为搬到「消息设置」、生图风格搬到「机器人」页按机器人设置 /
   语音概率默认 5% / 媒体单元格真实可点击，见坑 49）已在 mock 全链验证，
   待用户真实 QQ 验证 → `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`。
-  重新打包已完成（2026-10-08 第二批后）：`dist\BaiAi-Tavern V0.2.2.exe`（本地安装用）+
+  重新打包已完成（2026-10-08 第三批后）：`dist\BaiAi-Tavern V0.2.2.exe`（本地安装用）+
   无空格发布副本 `dist\BaiAi-Tavern-V0.2.2.exe`（SHA256
-  `D112E6C8A5A02FC0691BA0A77DA3685F1A5077C8C07426BFF875E79F0A003749`，
+  `AE49370E4CD11C4EB70D849DE3F7995756C7DBE1C02EAB172331BD73C0250C92`，
   见 `dist\SHA256SUMS.txt`）+ 绿色版 `dist\BaiAi-Tavern\`。
   上传 Release 用无空格副本 + SHA256SUMS.txt（octet-stream + `?name=`，见坑 10）。
+  真机重点看（第三批）：**对话页点「角色」列选中消息后「查看 / 播放」按钮是否可用**、
+  **桌面快捷方式是否正常出现**（若仍失败，看安装完成弹窗/`%LOCALAPPDATA%\BaiAi-Tavern\logs\silent_install.log`
+  里 `shortcut_methods` 写的是 com / binary / failed，桌面重定向的机器已改走注册表真实桌面，见坑 51）。
   真机重点看：**多机器人不再同时发同样的主动消息**、**多机器人群里 @ 谁谁回答（其他机器人不抢话，
   平台新旧两种 @ 格式都认）**、**群消息 @/不 @ 都按开关响应（重点回归：群 @ 是否恢复回复；
   若还不回，查日志「全量群消息 @ 了机器人但未匹配到本机器人身份」的 mention 明细）**、

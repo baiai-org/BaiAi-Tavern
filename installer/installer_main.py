@@ -115,8 +115,14 @@ def run_silent_install(args: argparse.Namespace) -> int:
             pass
         return 1
     print("安装完成：%s" % result["install_dir"])
+    methods = result.get("shortcut_methods") or {}
     for item in result.get("shortcuts") or []:
-        print("  快捷方式：%s" % item)
+        method = methods.get(item) or ""
+        note = {"com": "系统接口", "binary": "文件写入兜底"}.get(method, method)
+        print("  快捷方式：%s（%s）" % (item, note) if note else "  快捷方式：%s" % item)
+    for item, method in methods.items():
+        if method == "failed":
+            print("  快捷方式创建失败：%s" % item)
     if not args.no_run:
         launch_after_install(Path(result["install_dir"]))
     return 0
@@ -260,6 +266,13 @@ def run_gui() -> int:
                 "快捷方式：%d 个（可在设置 → 应用里卸载）" % len(result.get("shortcuts") or []),
                 "用户数据（data 目录、config.yaml）不会被删除。",
             ]
+            methods = result.get("shortcut_methods") or {}
+            failed = [item for item, method in methods.items() if method == "failed"]
+            for item, method in methods.items():
+                if method == "failed":
+                    lines.append("桌面/开始菜单快捷方式创建失败：%s" % item)
+            if failed:
+                lines.append("可手动从安装目录发送快捷方式到桌面，或重装一次。")
             if cleaned:
                 lines.append("已清理旧版本残留：%s" % "、".join(cleaned))
             messagebox.showinfo("安装完成", "\n".join(lines))

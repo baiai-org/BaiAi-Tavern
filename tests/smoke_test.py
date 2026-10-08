@@ -889,6 +889,50 @@ def phase_unit_logic(c: Checker) -> None:
         str(effective_section(_cfg, _specs[0], "media")),
     )
 
+    # V0.2.2：桌面快捷方式「有时候创建不出来」——桌面被迁移到 OneDrive 时
+    # 硬编码 %USERPROFILE%\Desktop 是错的目录；兜底 .lnk 写完后读回验证
+    # 又被杀软拦住时会把刚写好的文件删掉。两个修法都在这里验证
+    from installer import common as _ic
+
+    _real_shell_folders = _ic._user_shell_folders
+    try:
+        _ic._user_shell_folders = lambda: {"Desktop": r"%USERPROFILE%\OneDrive\Desktop"}
+        _one = _ic.desktop_dir()
+        c.check(
+            "桌面目录按注册表 Known Folders 解析（OneDrive 重定向时落在真实桌面）",
+            str(_one) == str(Path(os.environ.get("USERPROFILE") or Path.home()) / "OneDrive" / "Desktop"),
+            str(_one),
+        )
+        _ic._user_shell_folders = lambda: {}
+        _fallback = _ic.desktop_dir()
+        c.check(
+            "注册表没有覆盖时回落到 %USERPROFILE%\\Desktop",
+            str(_fallback) == str(Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop"),
+            str(_fallback),
+        )
+    finally:
+        _ic._user_shell_folders = _real_shell_folders
+
+    import tempfile as _tempfile
+
+    _lnk_dir = Path(_tempfile.mkdtemp(prefix="tavern-lnk-"))
+    _lnk_file = _lnk_dir / "test.lnk"
+    _ok_target = _lnk_dir / "fake.exe"
+    _ok_target.write_bytes(b"MZ")
+    c.check(
+        "兜底写出的 .lnk 文件头魔数校验通过（COM 读回被杀软拦截时也能保留文件）",
+        _ic.write_lnk(_lnk_file, _ok_target) and _ic._lnk_looks_valid(_lnk_file),
+        str(_lnk_file),
+    )
+    _bad_file = _lnk_dir / "bad.lnk"
+    _bad_file.write_bytes(b"\x00\x01\x02\x03" * 8)
+    c.check("文件头损坏的 .lnk 被识别为无效（会删掉半成品）", not _ic._lnk_looks_valid(_bad_file), "")
+    _trunc_file = _lnk_dir / "trunc.lnk"
+    _trunc_file.write_bytes(_ic.build_lnk_bytes(_ok_target)[:12])
+    c.check("截断的 .lnk 被识别为无效", not _ic._lnk_looks_valid(_trunc_file), "")
+    _missing_file = _lnk_dir / "missing.lnk"
+    c.check("不存在的文件按无效处理", not _ic._lnk_looks_valid(_missing_file), "")
+
     c.check(
         "官方错误码有可读提示（AppID/AppSecret 不正确）",
         "100016" in describe_error({"code": 100016, "message": "invalid appid or secret"})

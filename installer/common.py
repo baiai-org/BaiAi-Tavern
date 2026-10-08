@@ -72,13 +72,57 @@ def install_dir_for_self() -> Path:
     return default_install_dir()
 
 
+def _user_shell_folders() -> Dict[str, str]:
+    """读「用户 shell 文件夹」注册表（Known Folders 的用户覆盖项）。
+
+    个别系统的桌面 / 开始菜单被重定向（最典型：桌面迁移到 OneDrive，
+    真实桌面在 ``%USERPROFILE%\\OneDrive\\Desktop``），硬编码
+    ``%USERPROFILE%\\Desktop`` 会把快捷方式写进一个**不显示**的目录
+    ——用户看到的现象就是「桌面有时候创建不出快捷方式」。
+    """
+    winreg = _winreg()
+    if winreg is None:  # pragma: no cover
+        return {}
+    result: Dict[str, str] = {}
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+        ) as key:
+            index = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                if isinstance(value, str):
+                    result[name] = value
+                index += 1
+    except OSError:
+        pass
+    return result
+
+
+def _shell_folder_dir(name: str, fallback: Path) -> Path:
+    """按注册表 Known Folders 取真实目录，展开 ``%USERPROFILE%`` 之类的变量。"""
+    raw = _user_shell_folders().get(name)
+    if raw:
+        try:
+            expanded = os.path.expandvars(raw).strip()
+        except Exception:
+            expanded = ""
+        if expanded:
+            return Path(expanded)
+    return fallback
+
+
 def desktop_dir() -> Path:
-    return Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop"
+    return _shell_folder_dir("Desktop", Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop")
 
 
 def startmenu_dir() -> Path:
-    appdata = os.environ.get("APPDATA") or str(Path.home())
-    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    appdata = Path(os.environ.get("APPDATA") or str(Path.home()))
+    return _shell_folder_dir("Start Menu", appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs")
 
 
 def payload_dir() -> Path:
@@ -273,6 +317,23 @@ def lnk_target(lnk_path: Path) -> str:
     return ""
 
 
+def _lnk_looks_valid(path: Path) -> bool:
+    """按文件头判断 .lnk 是否结构完整（尺寸 0x4C + CLSID 魔数）。
+
+    COM 读回（WScript.Shell）会被部分安全软件拦截，读不回**不等于文件坏了**；
+    文件头完好就当成功，避免把刚写好的快捷方式自己删掉。
+    """
+    try:
+        with open(str(path), "rb") as handle:
+            head = handle.read(24)
+    except OSError:
+        return False
+    if len(head) < 24:
+        return False
+    size = struct.unpack("<I", head[0:4])[0]
+    return size == 0x4C and head[4:20] == _LNK_CLSID
+
+
 def create_shortcut(
     lnk_path: Path,
     target: Path,
@@ -325,6 +386,12 @@ def create_shortcut(
     if write_lnk(lnk_path, target, arguments, workdir, icon, description):
         resolved = lnk_target(lnk_path)
         if resolved and Path(resolved).name.lower() == Path(target).name.lower():
+            LAST_SHORTCUT_METHOD = "binary"
+            return True
+        # 读回失败：文件可能仍是好的（常见原因——安全软件同时拦住了
+        # WScript.Shell 的读回）。按文件头魔数再判一次：完好就保留，
+        # 截断 / 损坏才删掉半成品。
+        if _lnk_looks_valid(lnk_path):
             LAST_SHORTCUT_METHOD = "binary"
             return True
         try:
@@ -664,15 +731,18 @@ def install(
         return {"ok": False, "error": "复制完成但缺少 %s，安装包可能不完整" % EXE_NAME}
 
     shortcuts: List[Path] = []
+    shortcut_methods: Dict[str, str] = {}
     if create_desktop:
         lnk = (desktop_path or desktop_dir()) / ("%s.lnk" % APP_NAME)
         if create_shortcut(lnk, exe, workdir=target, description=APP_DESCRIPTION):
             shortcuts.append(lnk)
+        shortcut_methods[str(lnk)] = LAST_SHORTCUT_METHOD
     if create_startmenu:
         folder = startmenu_path or startmenu_dir()
         lnk = folder / APP_NAME / ("%s.lnk" % APP_NAME)
         if create_shortcut(lnk, exe, workdir=target, description=APP_DESCRIPTION):
             shortcuts.append(lnk)
+        shortcut_methods[str(lnk)] = LAST_SHORTCUT_METHOD
 
     write_uninstall_entry(target, shortcuts, reg_path=reg_path)
     cleaned = clean_legacy_files(target)
@@ -682,6 +752,7 @@ def install(
         "ok": True,
         "install_dir": str(target),
         "shortcuts": [str(item) for item in shortcuts],
+        "shortcut_methods": shortcut_methods,
         "copied": result["copied"],
         "cleaned": cleaned,
         "stopped": stopped,
