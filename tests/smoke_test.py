@@ -2215,6 +2215,14 @@ def phase_unit_logic(c: Checker) -> None:
         and "画一张我的照片" in _fused_msgs[1]["content"],
         _fused_msgs[0]["content"][:200],
     )
+    c.check(
+        "融合规则：角色本人出场时描述带角色名 + 风格名称必须写明（动漫=日本动漫京阿尼画风 / 自定义原样写明）",
+        "角色的名字" in _fused_msgs[0]["content"]
+        and "写明风格名称" in _fused_msgs[0]["content"]
+        and "日本动漫京阿尼画风" in _fused_msgs[0]["content"]
+        and "解释扩展" in _fused_msgs[0]["content"],
+        _fused_msgs[0]["content"][:300],
+    )
     _fused_msgs2 = build_image_fuse_messages(
         "画一张我的照片", _with_char, style_text="，画面风格：吉卜力风格，水彩质感"
     )
