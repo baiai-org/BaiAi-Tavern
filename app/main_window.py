@@ -52,7 +52,7 @@ NAV_ITEMS = [
     ("机器人", BotsPage),
     ("角色管理", CharactersPage),
     ("模型路由", ModelsPage),
-    ("主动消息", ProactivePage),
+    ("消息设置", ProactivePage),
     ("对话查看", ConversationsPage),
     ("系统设置", SettingsPage),
     ("日志", LogsPage),

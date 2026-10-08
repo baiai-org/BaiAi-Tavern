@@ -163,11 +163,18 @@ async def handle_incoming(
 
     # ------------------------------------------------------------ 入站多媒体
     hub = getattr(runtime, "media", None)
+    # 该机器人的生效富媒体段（全局 + 本机器人覆盖，V0.2.2 起富媒体可按机器人设置）
+    media_section = None
+    if bot is not None:
+        try:
+            media_section = bot.effective_media()
+        except Exception:  # pragma: no cover - 旧版假 bot
+            media_section = None
     image_paths: List[str] = []
     voice_path = ""
     if hub is not None:
         try:
-            media: Optional[MediaInbound] = await hub.inbound_media(incoming)
+            media: Optional[MediaInbound] = await hub.inbound_media(incoming, media_section)
             if media is not None:
                 image_paths = list(media.image_paths)
                 voice_path = str(media.voice_paths[0]) if media.voice_paths else ""
@@ -183,7 +190,7 @@ async def handle_incoming(
                 )
         except Exception as exc:
             log.warning("入站多媒体处理失败（按纯文字继续）：%s", exc)
-        media_hint = hub.media_hint()
+        media_hint = hub.media_hint(media_section)
         if media_hint:
             hint = (hint + "\n" + media_hint).strip()
 
@@ -200,7 +207,7 @@ async def handle_incoming(
     out = OutgoingReply(text=content, body=content)
     if hub is not None:
         try:
-            out = await hub.compose(character, content)
+            out = await hub.compose(character, content, media_section)
         except Exception as exc:
             log.warning("出站消息组装失败（按纯文字继续）：%s", exc)
             out = OutgoingReply(text=content, body=content)

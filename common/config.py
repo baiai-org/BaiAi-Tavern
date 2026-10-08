@@ -119,7 +119,7 @@ DEFAULTS: Dict[str, Any] = {
     # 富媒体（V0.2 图片 / 语音）行为
     "media": {
         "enabled": True,               # 总开关：关闭后只收发纯文字
-        "voice_reply_probability": 0.1,  # 回复改用语音的概率（0.0~1.0），单聊/群聊/主动消息通用
+        "voice_reply_probability": 0.05,  # 回复改用语音的概率（0.0~1.0），单聊/群聊/主动消息通用
         "allow_image": True,           # 允许角色给你发图（回复里出现 [IMG] 描述时触发生成）
         "voice_max_chars": 180,        # 单条语音对应的文字上限，超过会拆成多条语音
         "image_marker": "[IMG]",       # 角色想发图时写在回复里的标记（后跟绘图描述）

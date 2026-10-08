@@ -490,6 +490,38 @@ def main() -> int:
             "B=%d/%d" % (len(assistant_messages(client, id_b)), b_messages),
         )
 
+        # V0.2.2：平台 2026-09 起的新格式 —— content 不带 @ 占位，mentions 里
+        # is_you 标记「@ 的是你」（同一条消息推到两个机器人的连接，is_you 不同）
+        before_a = len(mock_a.official_sent())
+        before_b = len(mock_b.official_sent())
+        mock_a.emit_group(
+            "新格式：@ 了主机器人",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+            mention_marker=False,
+            mention_is_you=True,
+            id="mock-new-format-1",
+        )
+        mock_b.emit_group(
+            "新格式：@ 了主机器人",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+            mention_marker=False,
+            mention_is_you=False,
+            mention_fields={"id": "unmatched-internal-id", "user_openid": "unmatched-internal-id", "union_openid": "unmatched-union-id"},
+            id="mock-new-format-1",
+        )
+        checker.check(
+            "新格式（is_you 判定）@ 主机器人时也只有主机器人回复",
+            wait_for(
+                lambda: any(item.get("kind") == "group" for item in mock_a.official_sent()[before_a:]),
+                timeout=60,
+            )
+            and len(mock_b.official_sent()) == before_b,
+            "A 侧新增=%d B 侧新增=%d"
+            % (len(mock_a.official_sent()) - before_a, len(mock_b.official_sent()) - before_b),
+        )
+
         before_a = len(mock_a.official_sent())
         before_b = len(mock_b.official_sent())
         _emit_to_both("群里普通消息，没有 @ 任何人")

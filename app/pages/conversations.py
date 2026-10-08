@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices, QMouseEvent
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +29,28 @@ from common.utils import truncate
 
 from ..widgets.fields import ghost_button, hint_label, primary_button
 from .base import Page
+
+
+class _MediaCellWidget(QWidget):
+    """可点击的媒体单元格容器（图片缩略图 / 语音徽标）。
+
+    QTableWidget 里用 setCellWidget 塞自定义控件后，子控件会把鼠标事件
+    吃掉，表格的 itemClicked 不再触发（V0.2.2 前「缩略图点了没反应」
+    的根因）。这里让容器自己响应左键点击并发出 clicked 信号；子控件
+    全部设为鼠标事件透明（见 _MediaCellWidget 使用处的
+    WA_TransparentForMouseEvents），保证点缩略图任意位置都算点击。
+    """
+
+    clicked = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class ConversationsPage(Page):
@@ -196,9 +218,17 @@ class ConversationsPage(Page):
         self.btn_view_media.setEnabled(self._selected_media_row() is not None)
 
     def _on_message_cell_clicked(self, row: int, column: int) -> None:
-        """点击列表里的图片缩略图 / 语音徽标，直接查看 / 播放。"""
+        """点击列表里的图片缩略图 / 语音徽标，直接查看 / 播放。
+
+        单元格是自定义控件（setCellWidget）时，Qt 不会触发 itemClicked
+        （子控件把鼠标事件吃掉了），所以媒体单元格自己发 clicked 信号
+        走同一个入口（见 ``_MediaCellWidget``）。
+        """
         if column != 2:
             return
+        self._activate_media_row(row)
+
+    def _activate_media_row(self, row: int) -> None:
         # 让该行成为选中行（_selected_media_row 依赖 selectionModel）
         current = self.message_table.currentRow()
         if current != row:
@@ -206,10 +236,10 @@ class ConversationsPage(Page):
         if self._selected_media_row() is not None:
             self._view_selected_media()
 
-    @staticmethod
-    def _media_cell_widget(kind: str, path: str, caption: str, parent: QWidget):
+    def _media_cell_widget(self, kind: str, path: str, caption: str, row: int, parent: QWidget):
         """内容列的媒体单元格：图片显示缩略图，语音显示播放徽标。
 
+        整个单元格可点击（点缩略图 / 徽标 / 文字都能查看图片、播放语音）；
         文件不在磁盘上时返回 None（调用方退回纯文字显示）。
         """
         from PySide6.QtGui import QPixmap
@@ -218,7 +248,9 @@ class ConversationsPage(Page):
 
         if not Path(path).is_file():
             return None
-        container = QWidget(parent)
+        container = _MediaCellWidget(parent)
+        container.setToolTip(path)
+        container.clicked.connect(lambda r=row: self._activate_media_row(r))
         layout = QHBoxLayout(container)
         layout.setContentsMargins(2, 4, 2, 4)
         layout.setSpacing(8)
@@ -234,9 +266,11 @@ class ConversationsPage(Page):
                 label.setAlignment(Qt.AlignCenter)
             label.setFixedSize(72, 72)
             label.setToolTip(path)
+            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(label, 0, Qt.AlignTop)
-            text_label = QLabel(caption or "（用户发来了一张图片）", container)
+            text_label = QLabel(caption or "（用户发来了一张图片，点击查看）", container)
             text_label.setWordWrap(True)
+            text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(text_label, 1)
         else:
             # 语音徽标：QPainter 画的播放三角（QLabel 只能 setPixmap，没有 setIcon）
@@ -246,12 +280,15 @@ class ConversationsPage(Page):
             triangle = QLabel(container)
             triangle.setPixmap(_icon("play", "#4a90d9", 16).pixmap(QSize(16, 16)))
             triangle.setToolTip(path)
+            triangle.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             badge = QLabel("语音", container)
             badge.setStyleSheet("font-weight: 600; color: #4a90d9;")
+            badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(triangle, 0, Qt.AlignTop)
             layout.addWidget(badge, 0, Qt.AlignTop)
-            text_label = QLabel(caption or "（用户发来了一条语音）", container)
+            text_label = QLabel(caption or "（用户发来了一条语音，点击播放）", container)
             text_label.setWordWrap(True)
+            text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(text_label, 1)
         return container
 
@@ -402,7 +439,7 @@ class ConversationsPage(Page):
                     Qt.GlobalColor.gray if role != "assistant" else Qt.GlobalColor.white
                 )
                 self.message_table.setItem(row, 1, speaker_item)
-                cell = self._media_cell_widget(kind, media_path, caption, self.message_table)
+                cell = self._media_cell_widget(kind, media_path, caption, row, self.message_table)
                 if cell is not None:
                     self.message_table.setCellWidget(row, 2, cell)
                 else:

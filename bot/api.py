@@ -237,6 +237,11 @@ async def update_bot(bot_id: str, payload: Dict[str, Any] = Body(default={})) ->
     runtime.config.patch(patch, persist=True)
     runtime.config.load(force=True)
     runtime.apply_config()
+    # 按机器人的覆盖配置（proactive / media）变化时立即重排调度任务
+    try:
+        runtime.scheduler.reschedule()
+    except Exception:  # pragma: no cover
+        pass
     runtime.publish({"type": "bots_changed"})
     updated = runtime.bot_by_id(bot_id)
     return {"ok": True, "bot": updated.status() if updated is not None else {}}

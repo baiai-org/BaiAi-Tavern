@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -203,7 +204,47 @@ class TimeListEdit(QWidget):
         self.changed.emit()
 
 
+class ProbabilityRow(QWidget):
+    """0–100 的滑动条 + 百分比显示（语音回复概率等场景）。"""
+
+    changed = Signal()
+
+    def __init__(self, value: float = 0.3, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.slider = QSlider(Qt.Horizontal, self)
+        self.slider.setRange(0, 100)
+        self.slider.setValue(int(round(value * 100)))
+        self.slider.valueChanged.connect(self._on_changed)
+        self.label = QLabel(self)
+        self.label.setObjectName("ValueLabel")
+        self.label.setFixedWidth(48)
+        self.label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._sync_label()
+        layout.addWidget(self.slider, 1)
+        layout.addWidget(self.label)
+
+    def _sync_label(self) -> None:
+        self.label.setText("%d%%" % self.slider.value())
+
+    def _on_changed(self, _value: int) -> None:
+        self._sync_label()
+        self.changed.emit()
+
+    def value(self) -> float:
+        return self.slider.value() / 100.0
+
+    def set_value(self, value: float) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round(max(0.0, min(1.0, float(value))) * 100)))
+        self.slider.blockSignals(False)
+        self._sync_label()
+
+
 __all__ = [
+    "ProbabilityRow",
     "TimeListEdit",
     "add_form_row",
     "danger_button",

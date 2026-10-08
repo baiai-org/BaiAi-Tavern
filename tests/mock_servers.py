@@ -369,13 +369,21 @@ async def control_emit_group(payload: Dict[str, Any] = Body(default={})) -> Dict
 
     * ``event_type``：``GROUP_AT_MESSAGE_CREATE``（默认，@ 事件，content 不带 @ 标记）
       或 ``GROUP_MESSAGE_CREATE``（「接收所有消息」全量模式：群里每条消息都会推给
-      群里的**每个**机器人，content 保留 ``<@AppID>`` @ 标记——真实平台实测格式）。
-    * ``mention_appid``：全量模式下被 @ 的机器人 AppID，会在 content 前缀
-      ``<@{appid}>``（真实平台 @ 机器人时就是这样带的）。
+      群里的**每个**机器人）。
+    * ``mention_appid``：被 @ 的机器人 AppID。默认在 content 前缀 ``<@{appid}>``
+      （旧平台实测格式）。
+    * ``mention_marker``：false 时 content **不带** ``<@...>`` 前缀（2026-09 起的新
+      平台格式：content 已去除 @ 前缀，@ 判定只靠 mentions）。
+    * ``mention_is_you`` / ``mention_fields``：控制 mentions 条目的字段（模拟平台
+      下发的 User 对象：``is_you`` / ``user_openid`` / ``member_openid`` 等）。
+      ``mention_is_you`` 为 true 时，该 mock 的网关会收到 ``is_you: true`` 条目
+      （即「@ 的是本机器人」的新平台判定方式）；不传则沿用旧的 ``{id, bot}`` 条目。
+    * ``id``：msg_id（测试同一消息的多事件乱序推送时复用同一个 id）。
     """
     content = str(payload.get("content") or "群里在聊什么")
     mention_appid = str(payload.get("mention_appid") or "").strip()
-    if mention_appid:
+    add_marker = payload.get("mention_marker", True) is not False
+    if mention_appid and add_marker:
         content = "<@%s> %s" % (mention_appid, content)
     data = {
         "id": payload.get("id") or "mock-group-%d" % (STATE["official_seq"] + 1),
@@ -385,9 +393,23 @@ async def control_emit_group(payload: Dict[str, Any] = Body(default={})) -> Dict
         "author": {"member_openid": payload.get("member_openid") or DEFAULT_MEMBER_OPENID},
     }
     if mention_appid:
-        # 与真实事件一致：mentions 列出被 @ 的对象（@ 事件本身不含机器人自身，
-        # 全量事件里则是被 @ 的 AppID）
-        data["mentions"] = [{"id": mention_appid, "bot": True}]
+        # 与真实事件一致：mentions 列出被 @ 的对象。真实 User 对象字段更多
+        # （username / union_openid / user_openid / member_openid / bot / is_you…），
+        # 这里默认给全常见字段，is_you 按调用方参数（缺省 = 旧格式不带 is_you）
+        entry = {
+            "id": mention_appid,
+            "username": "bot-%s" % mention_appid,
+            "bot": True,
+            "union_openid": "union-%s" % mention_appid,
+            "user_openid": mention_appid,
+        }
+        if payload.get("mention_is_you") is True:
+            entry["is_you"] = True
+        elif payload.get("mention_is_you") is False:
+            entry["is_you"] = False
+        for key, value in (payload.get("mention_fields") or {}).items():
+            entry[str(key)] = value
+        data["mentions"] = [entry]
     attachments = payload.get("attachments")
     if attachments:
         data["attachments"] = attachments
@@ -891,13 +913,21 @@ class MockProcess:
         member_openid: str = DEFAULT_MEMBER_OPENID,
         event_type: str = "GROUP_AT_MESSAGE_CREATE",
         mention_appid: str = "",
+        mention_marker: bool = True,
+        mention_is_you: Any = None,
+        mention_fields: Any = None,
         **extra: Any
     ) -> Dict[str, Any]:
         """向机器人推送一条群聊消息。
 
         ``event_type`` 传 ``GROUP_MESSAGE_CREATE`` 即模拟「接收所有消息」全量模式
-        （真实平台会把群里每条消息推给群里每个机器人，@ 机器人时 content 带
-        ``<@AppID>`` 标记，用 ``mention_appid`` 指定被 @ 的机器人）。
+        （真实平台会把群里每条消息推给群里每个机器人）。被 @ 的机器人用
+        ``mention_appid`` 指定：
+
+        * 旧平台格式（默认）：content 带 ``<@AppID>`` 前缀；
+        * 新平台格式（2026-09 起）：content 不带 @ 前缀（``mention_marker=False``），
+          @ 判定靠 mentions 条目（``mention_is_you=True/False``、
+          ``mention_fields`` 可补 user_openid 等字段）。
         """
         payload = {
             "content": content,
@@ -905,7 +935,12 @@ class MockProcess:
             "member_openid": member_openid,
             "event_type": event_type,
             "mention_appid": mention_appid,
+            "mention_marker": mention_marker,
         }
+        if mention_is_you is not None:
+            payload["mention_is_you"] = mention_is_you
+        if mention_fields is not None:
+            payload["mention_fields"] = mention_fields
         payload.update(extra)
         response = self.client.post("/__control/emit_group", json=payload)
         response.raise_for_status()

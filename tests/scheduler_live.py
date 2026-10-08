@@ -42,8 +42,8 @@ try:
 except Exception:
     pass
 
-#: 定时任务带 90 秒抖动，加上「等到下一分钟」最多 60 秒，再留一点余量
-WAIT_SECONDS = 210
+#: 定时任务带 90 秒抖动，加上「等到下一分钟」最多 120 秒，再留一点余量
+WAIT_SECONDS = 300
 
 
 def free_port() -> int:
@@ -72,7 +72,10 @@ def main() -> int:
     import yaml
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    next_minute = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
+    # 留 2 分钟缓冲：自检前置步骤 + 进程启动可能超过 1 分钟（慢机器 / 杀软扫描
+    # Python 解释器时）。若调度器安装任务时该分钟的 cron 槽位已经过去，
+    # APScheduler 不会回补已过去的槽位，任务会直接排到第二天（曾因此偶发红）。
+    next_minute = (datetime.now() + timedelta(minutes=2)).strftime("%H:%M")
     data["proactive"].update(
         {
             "scheduled_enabled": True,

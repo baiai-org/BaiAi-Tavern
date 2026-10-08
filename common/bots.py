@@ -260,6 +260,29 @@ def bot_config_values(spec: BotSpec) -> Dict[str, Any]:
     return copy.deepcopy(spec.data)
 
 
+def effective_section(config: Any, spec: BotSpec, section: str) -> Dict[str, Any]:
+    """某个「可按机器人覆盖」的段的生效值：全局段 + 该机器人条目里的同名段（按键覆盖）。
+
+    支持覆盖的段：``proactive``（主动消息）、``media``（富媒体行为）。
+    机器人条目里没写的键回落到全局值，因此界面上选某个机器人时显示的是
+    「它实际生效的完整配置」，保存时写回的就是完整段。
+    """
+    result: Dict[str, Any] = {}
+    try:
+        value = config.get(section, {}) or {}
+        if isinstance(value, dict):
+            result = copy.deepcopy(value)
+    except Exception:  # pragma: no cover - 传入普通 dict 时
+        raw = (config or {}).get(section) if isinstance(config, dict) else None
+        if isinstance(raw, dict):
+            result = copy.deepcopy(raw)
+    override = (spec.data or {}).get(section)
+    if isinstance(override, dict):
+        for key, item in override.items():
+            result[key] = copy.deepcopy(item)
+    return result
+
+
 def character_map(characters: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for item in characters or []:
@@ -281,6 +304,7 @@ __all__ = [
     "bot_dicts",
     "bot_specs",
     "character_map",
+    "effective_section",
     "mode_label",
     "new_bot_entry",
     "new_bot_id",

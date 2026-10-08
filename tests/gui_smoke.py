@@ -431,7 +431,7 @@ def main() -> int:
         checker.check(
             "八个页面齐备（含机器人管理与模型路由）",
             titles
-            == ["仪表盘", "机器人", "角色管理", "模型路由", "主动消息", "对话查看", "系统设置", "日志"],
+            == ["仪表盘", "机器人", "角色管理", "模型路由", "消息设置", "对话查看", "系统设置", "日志"],
             str(titles),
         )
         # 页面宽度守卫：任何可滚动页面的内容都不许比视口宽。
@@ -920,20 +920,41 @@ def main() -> int:
             ),
         )
 
-        # ------------------------------------------------------- 主动消息
+        # ------------------------------------------------------- 消息设置（原「主动消息」）
         window.show_page_by_key("proactive")
         proactive_page = page_by_key("proactive")
         proactive_page.refresh()
         pump(app, 0.5)
         checker.check(
-            "主动消息页载入频率配置",
+            "消息设置页载入频率配置",
             proactive_page.spin_global.value() == 10,
             str(proactive_page.spin_global.value()),
         )
         checker.check(
-            "主动消息页载入定时时间列表",
+            "消息设置页载入定时时间列表",
             proactive_page.times_edit.times() == ["09:00", "21:00"],
             str(proactive_page.times_edit.times()),
+        )
+        checker.check(
+            "消息设置页顶部有设置范围下拉（全局 + 按机器人）",
+            proactive_page.combo_scope is not None
+            and proactive_page.combo_scope.count() >= 2
+            and str(proactive_page.combo_scope.itemData(0)) == "global",
+            "items=%d first=%r"
+            % (
+                proactive_page.combo_scope.count()
+                if proactive_page.combo_scope is not None
+                else -1,
+                proactive_page.combo_scope.itemData(0) if proactive_page.combo_scope is not None else None,
+            ),
+        )
+        checker.check(
+            "富媒体行为已搬到消息设置页（语音概率 / 上限 / 保留天数）",
+            proactive_page.prob_voice is not None
+            and proactive_page.spin_voice_max is not None
+            and proactive_page.spin_temp_days is not None
+            and proactive_page.chk_media_enabled is not None,
+            "",
         )
         proactive_page.spin_global.setValue(8)
         proactive_page._save()
@@ -947,10 +968,43 @@ def main() -> int:
         saved = wait_until(app, lambda: _limit_in_bot() == 8, timeout=25)
         detail = "Bot 内值=%s，页面收集值=%s，文件值=%s" % (
             _limit_in_bot(),
-            proactive_page._collect().get("global_daily_limit"),
+            proactive_page._collect_proactive().get("global_daily_limit"),
             _limit_in_file(config_path),
         )
-        checker.check("主动消息页保存配置生效", saved, detail)
+        checker.check("消息设置页保存全局配置生效", saved, detail)
+
+        # V0.2.2：按机器人单独设置（只写该机器人的覆盖段，全局不变）
+        if proactive_page.combo_scope.count() >= 2:
+            proactive_page.combo_scope.setCurrentIndex(1)
+            pump(app, 0.3)
+            _bot_id = str(proactive_page.combo_scope.itemData(1))
+            proactive_page.spin_global.setValue(3)
+            proactive_page._save()
+
+            def _bot_limit() -> Any:
+                try:
+                    cfg = client.get("/api/config").json()["config"]
+                    entry = next(
+                        (item for item in cfg.get("bots", []) or [] if str(item.get("id") or "") == _bot_id),
+                        cfg.get("qq") if str(cfg.get("qq", {}).get("id") or "") == _bot_id else {},
+                    )
+                    return int((entry or {}).get("proactive", {}).get("global_daily_limit"))
+                except Exception as exc:
+                    return "错误：%s" % exc
+
+            bot_saved = wait_until(app, lambda: _bot_limit() == 3, timeout=25)
+            checker.check(
+                "消息设置页选机器人保存后，只有该机器人条目被写入",
+                bool(bot_saved),
+                "bot_id=%s 条目值=%s 全局值=%s"
+                % (_bot_id, _bot_limit(), _limit_in_bot()),
+            )
+            # 再切回全局保存，把测试痕迹还原（全局仍是 8）
+            proactive_page.combo_scope.setCurrentIndex(0)
+            pump(app, 0.3)
+            proactive_page.spin_global.setValue(8)
+            proactive_page._save()
+            wait_until(app, lambda: _limit_in_bot() == 8, timeout=25)
 
         # ------------------------------------------------------- 对话查看
         before = len(mock.official_sent())
@@ -1120,10 +1174,40 @@ def main() -> int:
                 table.selectRow(target)
                 pump(app, 0.2)
                 checker.check(
-                    "选中图片消息后「查看 / 播放」按钮可用（点缩略图可直接打开）",
+                    "选中图片消息后「查看 / 播放」按钮可用",
                     settled and conversations_page.btn_view_media.isEnabled(),
                     "settled=%s row=%d rows=%d" % (settled, target, table.rowCount()),
                 )
+                # V0.2.2 修复：setCellWidget 的缩略图/徽标此前吃掉鼠标事件、
+                # 点了没反应。现在容器自己响应左键 —— 用真实鼠标点击验证
+                from PySide6.QtTest import QTest as _QTest
+
+                image_cell = table.cellWidget(target, 2)
+                if image_cell is not None:
+                    _QTest.mouseClick(image_cell, Qt.LeftButton)
+                    pump(app, 0.5)
+                    checker.check(
+                        "直接点击图片缩略图即可打开（系统查看器）",
+                        "已打开图片" in conversations_page.media_status.text(),
+                        conversations_page.media_status.text(),
+                    )
+            if voice_row >= 0:
+                from PySide6.QtTest import QTest as _QTest
+
+                table.clearSelection()
+                table.selectRow(voice_row)
+                pump(app, 0.2)
+                voice_cell2 = table.cellWidget(voice_row, 2)
+                if voice_cell2 is not None:
+                    _QTest.mouseClick(voice_cell2, Qt.LeftButton)
+                    pump(app, 0.5)
+                    # silk 走系统程序；mp3 走内置播放器，两种状态都算「点得动」
+                    checker.check(
+                        "直接点击语音徽标即可播放",
+                        ("正在播放" in conversations_page.media_status.text())
+                        or ("已用系统程序打开" in conversations_page.media_status.text()),
+                        conversations_page.media_status.text(),
+                    )
 
         # ------------------------------------------------------- 模型路由
         window.show_page_by_key("models")
@@ -1634,6 +1718,13 @@ def main() -> int:
             not hasattr(bots_page, "combo_mode")
             and bots_page.qq_form is not None
             and hasattr(bots_page.qq_form, "in_app_id"),
+        )
+        checker.check(
+            "机器人页带「生图风格」按机器人设置（auto/anime/realistic/off）",
+            hasattr(bots_page, "combo_image_style")
+            and bots_page.combo_image_style.count() == 4
+            and bots_page.combo_image_style.currentIndex() == 0,
+            str(getattr(bots_page, "combo_image_style", None)),
         )
 
         def bot_names() -> List[str]:

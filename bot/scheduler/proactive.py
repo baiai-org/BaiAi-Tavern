@@ -24,6 +24,39 @@ from . import triggers
 
 log = get_logger("bot.scheduler")
 
+
+class _SectionView:
+    """把某个机器人的生效 proactive 段包装成触发函数认识的点号配置视图。
+
+    ``triggers.check_*`` 一律读 ``proactive.xxx`` 键；这里把「全局 + 该机器人
+    覆盖」合并后的段按同一套键名暴露，触发函数无需感知按机器人覆盖的存在。
+    """
+
+    def __init__(self, section: Dict[str, Any]):
+        self._section = section or {}
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if isinstance(key, str) and key.startswith("proactive."):
+            return self._section.get(key.split(".", 1)[1], default)
+        return default
+
+
+def _bot_section(bot: Any) -> Dict[str, Any]:
+    """机器人的生效 proactive 段（取不到时回退全局，兼容假 runtime 的测试对象）。"""
+    try:
+        return bot.effective_proactive()
+    except Exception:  # pragma: no cover
+        config = getattr(bot, "rt", None)
+        return dict((getattr(config, "data", {}) or {}).get("proactive", {}) or {})
+
+
+def _bot_media_section(bot: Any) -> Dict[str, Any]:
+    """机器人的生效 media 段（取不到时返回 None = 读全局）。"""
+    try:
+        return bot.effective_media()
+    except Exception:  # pragma: no cover
+        return None
+
 try:  # APScheduler 3.x
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -113,13 +146,12 @@ class ProactiveScheduler:
     def _install_jobs(self) -> None:
         """按「每个已启用机器人一套任务」安装（V0.2.2）。
 
-        旧版是全局一个触发器、触发后所有机器人同时发言；现在定时 / 空闲 /
-        随机三类触发都是**每机器人独立**的：各自的时间抖动、概率判定、
-        频率限制与重排，多机器人不再同一秒集体发消息。
+        定时 / 空闲 / 随机三类触发都是**每机器人独立**的：各自的配置（「消息
+        设置」页可按机器人单独设置，未单独设置的跟随全局）、时间抖动、概率
+        判定、频率限制与重排，多机器人不再同一秒集体发消息。
         """
         if self.scheduler is None:
             return
-        config = self.rt.config
         for job in list(self.scheduler.get_jobs()):
             try:
                 self.scheduler.remove_job(job.id)
@@ -128,38 +160,42 @@ class ProactiveScheduler:
 
         bots = list(self.rt.enabled_bots())
 
-        # 定时触发：每个机器人一个任务；jitter 最多迟到 90 秒，让
-        # 「09:00」这种配置点在各机器人之间自然错开
-        if bool(config.get("proactive.scheduled_enabled", True)):
-            for item in config.get("proactive.scheduled_times", []) or []:
+        # 定时触发：每个机器人用自己的时间点（各自配置）
+        for bot in bots:
+            section = _bot_section(bot)
+            if not bool(section.get("scheduled_enabled", True)):
+                continue
+            for item in section.get("scheduled_times", []) or []:
                 hour, minute = parse_hhmm(item, (-1, -1))
                 if hour < 0:
                     continue
-                for bot in bots:
-                    # 必须直接传协程函数（bound method）+ kwargs：若用同步 lambda 包装，
-                    # APScheduler 会判定为普通函数丢进线程池，lambda 返回的协程永远不会
-                    # 被 await，任务「到点静默消失」（V0.2.2 曾因此踩坑）。
-                    self._add(
-                        (self._job_scheduled, {"bot_id": bot.id}),
-                        CronTrigger(hour=hour, minute=minute, jitter=90),
-                        "proactive_scheduled_%02d%02d_%s" % (hour, minute, bot.id),
-                        "定时主动消息 %02d:%02d · %s" % (hour, minute, bot.name),
-                    )
-
-        # 空闲触发：每个机器人一个周期检查（±60 秒抖动错开）
-        if bool(config.get("proactive.idle_enabled", True)):
-            interval = max(1, int(config.get("proactive.idle_check_interval_minutes", 15) or 15))
-            for bot in bots:
+                # 必须直接传协程函数（bound method）+ kwargs：若用同步 lambda 包装，
+                # APScheduler 会判定为普通函数丢进线程池，lambda 返回的协程永远不会
+                # 被 await，任务「到点静默消失」（V0.2.2 曾因此踩坑）。
                 self._add(
-                    (self._job_idle, {"bot_id": bot.id}),
-                    IntervalTrigger(minutes=interval, jitter=60),
-                    "proactive_idle_%s" % bot.id,
-                    "空闲检查 · %s（每 %d 分钟）" % (bot.name, interval),
+                    (self._job_scheduled, {"bot_id": bot.id}),
+                    CronTrigger(hour=hour, minute=minute, jitter=90),
+                    "proactive_scheduled_%02d%02d_%s" % (hour, minute, bot.id),
+                    "定时主动消息 %02d:%02d · %s" % (hour, minute, bot.name),
                 )
 
+        # 空闲触发：每个机器人用自己的检查周期
+        for bot in bots:
+            section = _bot_section(bot)
+            if not bool(section.get("idle_enabled", True)):
+                continue
+            interval = max(1, int(section.get("idle_check_interval_minutes", 15) or 15))
+            self._add(
+                (self._job_idle, {"bot_id": bot.id}),
+                IntervalTrigger(minutes=interval, jitter=60),
+                "proactive_idle_%s" % bot.id,
+                "空闲检查 · %s（每 %d 分钟）" % (bot.name, interval),
+            )
+
         # 随机触发：每个机器人各自独立的重排链（时间互不相同）
-        if bool(config.get("proactive.random_enabled", False)):
-            for bot in bots:
+        for bot in bots:
+            section = _bot_section(bot)
+            if bool(section.get("random_enabled", False)):
                 self._schedule_next_random(bot.id, bot.name)
 
         log.info(
@@ -177,7 +213,12 @@ class ProactiveScheduler:
 
     def _schedule_next_random(self, bot_id: str = "", bot_name: str = "") -> None:
         assert self.scheduler is not None
-        when = triggers.next_random_time(self.rt.config)
+        bot = self.rt.bot_by_id(bot_id)
+        if bot is not None:
+            section = _bot_section(bot)
+        else:
+            section = self.rt.config.get("proactive", {}) or {}
+        when = triggers.next_random_time(_SectionView(section))
         delay_minutes = max(0.0, (when - now()).total_seconds() / 60)
         log.info(
             "机器人「%s」的下次随机主动消息安排在 %s（%.0f 分钟后）",
@@ -202,9 +243,9 @@ class ProactiveScheduler:
 
     async def _job_random(self, bot_id: str) -> None:
         await self.run("random", bot_id=bot_id)
-        if bool(self.rt.config.get("proactive.random_enabled", False)):
-            bot = self.rt.bot_by_id(bot_id)
-            self._schedule_next_random(bot_id, bot.name if bot is not None else "")
+        bot = self.rt.bot_by_id(bot_id)
+        if bot is not None and bool(_bot_section(bot).get("random_enabled", False)):
+            self._schedule_next_random(bot_id, bot.name)
 
     async def _job_watch_config(self) -> None:
         try:
@@ -217,16 +258,16 @@ class ProactiveScheduler:
             log.warning("配置热重载失败: %s", exc)
 
     # ================================================================ 准入检查
-    async def _evaluate(self, trigger_type: str, force: bool, bot_id: Optional[str]) -> Tuple[bool, str]:
-        config = self.rt.config
-
+    async def _evaluate_for_bot(self, bot: Any, trigger_type: str, force: bool) -> Tuple[bool, str]:
+        """按**这个机器人自己的生效配置**（全局 + 它自己的覆盖）做准入检查。"""
         if force:
             return True, ""
 
+        view = _SectionView(_bot_section(bot))
         decisions = [
-            triggers.check_proactive_enabled(config),
-            triggers.check_dnd(config),
-            triggers.check_active_hours(config),
+            triggers.check_proactive_enabled(view),
+            triggers.check_dnd(view),
+            triggers.check_active_hours(view),
         ]
         for decision in decisions:
             if not decision.allowed:
@@ -234,22 +275,22 @@ class ProactiveScheduler:
 
         if trigger_type == "idle":
             last_user = await crud.get_last_user_message(self.rt.db)
-            decision = triggers.check_idle(config, last_user)
+            decision = triggers.check_idle(view, last_user)
             if not decision.allowed:
                 return False, decision.reason
 
-        # V0.2.2：每日上限与最小间隔都按**单个机器人**独立计算
-        today_total = await crud.proactive_count_today(self.rt.db, bot_id=bot_id or None)
-        decision = triggers.check_global_limit(config, today_total)
+        # 每日上限与最小间隔都按**单个机器人**独立计算
+        today_total = await crud.proactive_count_today(self.rt.db, bot_id=bot.id)
+        decision = triggers.check_global_limit(view, today_total)
         if not decision.allowed:
             return False, decision.reason
 
-        last = await crud.last_proactive(self.rt.db, bot_id=bot_id or None)
-        decision = triggers.check_min_interval(config, (last or {}).get("sent_at"))
+        last = await crud.last_proactive(self.rt.db, bot_id=bot.id)
+        decision = triggers.check_min_interval(view, (last or {}).get("sent_at"))
         if not decision.allowed:
             return False, decision.reason
 
-        decision = triggers.check_probability(config)
+        decision = triggers.check_probability(view)
         if not decision.allowed:
             return False, decision.reason
 
@@ -315,10 +356,6 @@ class ProactiveScheduler:
         if self.rt.sync_config():
             self.reschedule()
 
-        allowed, reason = await self._evaluate(trigger_type, force, bot_id)
-        if not allowed:
-            return self._skip(trigger_type, reason)
-
         targets, reason = self._targets(trigger_type, bot_id)
         if not targets:
             return self._skip(trigger_type, reason)
@@ -328,6 +365,28 @@ class ProactiveScheduler:
         # 让几条主动消息内容各不相同）
         used_character_ids: set = set()
         for bot in targets:
+            # 准入检查按**该机器人自己的生效配置**（V0.2.2 起可按机器人设置）
+            allowed, deny_reason = await self._evaluate_for_bot(bot, trigger_type, force)
+            if not allowed:
+                outcomes.append(
+                    {
+                        "ok": False,
+                        "skipped": True,
+                        "reason": deny_reason,
+                        "bot_id": bot.id,
+                        "bot_name": bot.name,
+                        "trigger": trigger_type,
+                    }
+                )
+                self.rt.publish(
+                    {
+                        "type": "proactive_skipped",
+                        "reason": deny_reason,
+                        "bot_id": bot.id,
+                        "bot_name": bot.name,
+                    }
+                )
+                continue
             outcome = await self._run_for_bot(bot, trigger_type, force, character_id, used_character_ids)
             outcomes.append(outcome)
             picked = str(outcome.get("character_id") or "")
@@ -414,7 +473,7 @@ class ProactiveScheduler:
 
         candidates = triggers.filter_candidates(
             pool,
-            self.rt.config,
+            _SectionView(_bot_section(bot)),
             counts,
             last_character_id,
             force=force or bound_forced or bool(character_id),
@@ -429,9 +488,10 @@ class ProactiveScheduler:
         # ---------------------------------------------------------- 生成
         hint = self._hint_text(trigger_type)
         hub = getattr(self.rt, "media", None)
+        media_section = _bot_media_section(bot)
         if hub is not None:
             try:
-                media_hint = hub.media_hint()
+                media_hint = hub.media_hint(media_section)
                 if media_hint:
                     hint = (hint + "\n" + media_hint).strip()
             except Exception:  # pragma: no cover
@@ -463,7 +523,7 @@ class ProactiveScheduler:
         out = OutgoingReply(text=content, body=content)
         if hub is not None:
             try:
-                out = await hub.compose(character, content)
+                out = await hub.compose(character, content, media_section)
             except Exception as exc:
                 log.warning("主动消息多媒体组装失败（按纯文字继续）：%s", exc)
                 out = OutgoingReply(text=content, body=content)
@@ -621,6 +681,13 @@ class ProactiveScheduler:
     def status(self) -> Dict[str, Any]:
         config = self.rt.config
         bots = [bot.status() for bot in getattr(self.rt, "bots", [])]
+        # 每个机器人自己的主动消息生效状态（全局 + 它自己的覆盖）
+        proactive_by_id: Dict[str, bool] = {}
+        for bot in getattr(self.rt, "bots", []):
+            try:
+                proactive_by_id[str(bot.id)] = bool(_bot_section(bot).get("enabled", True))
+            except Exception:  # pragma: no cover
+                proactive_by_id[str(bot.id)] = True
         return {
             "running": self.running,
             "enabled": bool(config.get("proactive.enabled", True)),
@@ -636,6 +703,7 @@ class ProactiveScheduler:
                     "connected": item.get("connected"),
                     "character_name": item.get("character_name") or "",
                     "target": item.get("target") or "",
+                    "proactive_enabled": proactive_by_id.get(str(item.get("id")), True),
                 }
                 for item in bots
             ],

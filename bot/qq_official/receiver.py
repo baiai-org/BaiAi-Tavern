@@ -75,13 +75,19 @@ def _bot_identities(bot: Any) -> List[str]:
 def _mentions_self(raw_content: str, mentions: Any, self_ids: Any) -> bool:
     """全量群消息里判断「@ 的是不是本机器人」。
 
-    真实平台（实测抓包）的群 @ 消息以 ``GROUP_MESSAGE_CREATE`` 下发，
-    content 里保留 ``<@机器人标识>`` 标记（``<@!...>`` 变体也存在）。
-    平台里「机器人」可以用多种标识被 @（AppID / user_id / openid），
-    所以把本机器人已知的**所有**身份都拿来匹配；``mentions`` 字段（消息中
-    @ 的用户列表，User 对象）里出现本机器人身份也算。
-    同一个群里有多个机器人时，只有被 @ 的那个该回复，所以必须精确匹配
-    身份，不能只看到 ``<@`` 就认作 @ 了自己。
+    平台（2026-09 起）的群 @ 消息 content **已去除 @ 前缀**，@ 判定只能靠
+    ``mentions``（消息中 @ 的用户列表，User 对象）。匹配顺序：
+
+    1. ``mentions[].is_you`` 为 True —— 平台直接标注「@ 的是你」（实测字段，
+       文档未列）；
+    2. mention 条目的任一身份字段（``id`` / ``user_openid`` / ``union_openid`` /
+       ``member_openid``）等于本机器人的任一已知身份（AppID / user_id / 学习到的
+       id / READY 里的 openid）；
+    3. content 里的 ``<@!?(...)>`` 占位等于本机器人身份（旧平台格式，实测抓包
+       ``<@BOT_ID> 文本``，保留兼容）。
+
+    同一个群里有多个机器人时，只有被 @ 的那个该回复，所以必须精确匹配身份，
+    不能只看到 ``<@`` 或 ``bot: true`` 就认作 @ 了自己。
     """
     ids = []
     if isinstance(self_ids, (list, tuple, set)):
@@ -90,16 +96,25 @@ def _mentions_self(raw_content: str, mentions: Any, self_ids: Any) -> bool:
         value = str(self_ids or "").strip()
         if value:
             ids = [value]
-    if not ids:
-        # 拿不到自己的任何身份（配置缺失）时退回旧行为：看到 @ 占位就当被 @
-        return "<@" in (raw_content or "")
-    for identity in ids:
-        if re.search(r"<@!?%s>" % re.escape(identity), raw_content or ""):
-            return True
+    id_set = set(ids)
+
     if isinstance(mentions, list):
         for item in mentions:
-            if isinstance(item, dict) and str(item.get("id") or "") in set(ids):
+            if not isinstance(item, dict):
+                continue
+            if item.get("is_you") is True:
                 return True
+            for key in ("id", "user_openid", "union_openid", "member_openid"):
+                if str(item.get(key) or "").strip() in id_set:
+                    return True
+
+    content = raw_content or ""
+    if not id_set:
+        # 拿不到自己的任何身份（配置缺失）时退回旧行为：看到 @ 占位就当被 @
+        return "<@" in content
+    for identity in id_set:
+        if re.search(r"<@!?%s>" % re.escape(identity), content):
+            return True
     return False
 
 
@@ -111,9 +126,10 @@ def parse_event(
     群聊两类事件都解析：``GROUP_AT_MESSAGE_CREATE``（@ 了机器人，content 已去掉
     @ 前缀、按文档语义就是 @ 了本机器人）与 ``GROUP_MESSAGE_CREATE``
     （「接收所有消息」全量模式：群里每条消息都推给每个机器人才会收到，
-    需要按 ``<@标识>`` 标记 / ``mentions`` 判断 @ 的是不是自己）。
+    content 同样已去掉 @ 前缀，需要按 ``mentions``（``is_you`` / 身份字段）
+    或旧格式的 ``<@标识>`` 占位判断 @ 的是不是自己）。
 
-    ``self_ids`` 是本机器人的全部已知身份（AppID / user_id / openid），
+    ``self_ids`` 是本机器人的全部已知身份（AppID / user_id / READY openid），
     全量模式下逐个匹配；只传 ``self_id`` 时用它一个。
     """
     event_type = str(event.get("type") or "")
@@ -140,6 +156,25 @@ def parse_event(
         else:
             identities = list(self_ids) if self_ids else ([self_id] if self_id else [])
             mentioned = _mentions_self(raw_content, mentions, identities)
+            if not mentioned:
+                # 诊断：全量消息里 @ 了机器人但没匹配上自己的身份 —— 打出 mention
+                # 明细，方便真机排查平台下发的身份字段到底是哪种格式
+                bot_mentions = [
+                    {
+                        key: str(item.get(key) or "")
+                        for key in ("id", "user_openid", "member_openid", "is_you")
+                    }
+                    for item in (mentions if isinstance(mentions, list) else [])
+                    if isinstance(item, dict) and item.get("bot")
+                ]
+                if bot_mentions or "<@" in raw_content:
+                    log.warning(
+                        "全量群消息 @ 了机器人但未匹配到本机器人身份（known=%s，mentions=%s，"
+                        "content=%r），让路不回复",
+                        identities,
+                        bot_mentions,
+                        truncate(raw_content, 80),
+                    )
     else:
         mentioned = True
 
@@ -182,23 +217,44 @@ class OfficialReceiver:
         # 被动回复序号：同一个 msg_id 的多次回复要递增（官方要求）
         self._seq: Dict[str, int] = {}
         # msg_id 去重：官方平台会对同一 msg_id 重复推送（文档明确要求去重），
-        # 不去重时同一条消息会触发两次回复
-        self._seen_messages: Dict[str, float] = {}
+        # 不去重时同一条消息会触发两次回复；值是 (state, timestamp)
+        self._seen_messages: Dict[str, tuple] = {}
 
     # ------------------------------------------------------------------ 去重
-    def _is_duplicate(self, message_id: str) -> bool:
-        now = time.time()
+    def _check_duplicate(self, message_id: str, mentioned: bool) -> bool:
+        """同一 msg_id 的重复推送去重（返回 True = 本条应忽略）。
+
+        官方平台对同一条消息可能推多次：@ 事件与全量事件可能**同 msg_id 先后到达
+        （顺序不保证）**，同一事件也可能重推。全量事件可能先于 @ 事件到达且识别不出
+        是 @ 本机器人（被让路），若把 msg_id 一刀切标成「已处理」，后到的 @ 事件会被
+        吃掉 → 这条消息永远不会被回复（V0.2.2 真机踩坑：群 @ 彻底不回复）。
+        因此按状态区分：
+
+        * 已回复过（含：先到的事件就是 @ 自己）→ 后续同 msg_id 一律忽略；
+        * 此前被让路（没 @ 本机器人）→ 这次若 @ 了本机器人（@ 事件），仍要处理。
+        """
         if not message_id:
             return False
-        last = self._seen_messages.get(message_id)
-        if last is not None and (now - last) < _SEEN_TTL:
+        now = time.time()
+        state_at = self._seen_messages.get(message_id)
+        if state_at is not None and (now - state_at[1]) >= _SEEN_TTL:
+            self._seen_messages.pop(message_id, None)
+            state_at = None
+        if state_at is None:
+            self._seen_messages[message_id] = ("replied" if mentioned else "skipped", now)
+            if len(self._seen_messages) > 400:  # 顺手清理过期项，避免无限增长
+                stale = [key for key, (_s, at) in self._seen_messages.items() if now - at >= _SEEN_TTL]
+                for key in stale:
+                    self._seen_messages.pop(key, None)
+            return False
+        state, _at = state_at
+        if state == "replied":
             return True
-        self._seen_messages[message_id] = now
-        if len(self._seen_messages) > 400:  # 顺手清理过期项，避免无限增长
-            stale = [key for key, at in self._seen_messages.items() if now - at >= _SEEN_TTL]
-            for key in stale:
-                self._seen_messages.pop(key, None)
-        return False
+        return not mentioned  # 此前让路：这次没 @ 自己才继续忽略
+
+    def _mark_replied(self, message_id: str) -> None:
+        if message_id:
+            self._seen_messages[message_id] = ("replied", time.time())
 
     # ------------------------------------------------------------------ 事件入口
     async def handle(self, event: Dict[str, Any]) -> None:
@@ -251,13 +307,14 @@ class OfficialReceiver:
             log.debug("忽略官方事件：%s", event_type)
             return
 
-        if self._is_duplicate(incoming.message_id):
+        if self._check_duplicate(incoming.message_id, incoming.mentioned):
             log.debug("msg_id=%s 重复推送（官方平台会重推），忽略", incoming.message_id)
             return
 
         if not await self._should_reply(incoming):
             return
 
+        self._mark_replied(incoming.message_id)
         await self._remember_peer(incoming)
         await handle_incoming(runtime, incoming, self._reply, bot=bot)
 

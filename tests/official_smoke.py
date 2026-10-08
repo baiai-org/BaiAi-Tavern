@@ -417,6 +417,110 @@ def main() -> int:
             "回复了 %d 次：%s" % (len(dup_replies), str(dup_replies)[:160]),
         )
 
+        # V0.2.2：平台 2026-09 起群 @ 消息 content 已去除 @ 前缀，@ 判定靠
+        # mentions 的 is_you / 身份字段 —— 新格式必须照常回复
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "新平台格式：content 没有 @ 占位，is_you 标记",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+            mention_marker=False,
+            mention_is_you=True,
+        )
+        checker.check(
+            "全量群消息新版格式（无 @ 占位 + is_you）仍会回复",
+            wait_for(
+                lambda: any(item["kind"] == "group" for item in mock.official_sent()[before:]),
+                timeout=45,
+            ),
+            str(mock.official_sent()[before:])[:200],
+        )
+
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "新平台格式：@ 了别的机器人",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid="some-other-app-id",
+            mention_marker=False,
+            mention_is_you=False,
+        )
+        time.sleep(8)
+        checker.check(
+            "全量群消息新版格式 @ 了别的机器人时不回复",
+            len(mock.official_sent()) == before,
+            str(mock.official_sent()[before:])[:200],
+        )
+
+        # V0.2.2 回归修复：同一 msg_id 的全量事件与 @ 事件先后到达（顺序不保证）。
+        # 全量事件先到达且没匹配上（让路）时，后到的 @ 事件仍要处理 ——
+        # 旧版去重把 msg_id 一刀切标掉，@ 事件被吃掉，群 @ 彻底不回复
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "先到的全量事件（身份字段没匹配上）",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+            mention_marker=False,
+            mention_fields={"id": "unmatched-internal-id", "user_openid": "unmatched-internal-id", "union_openid": "unmatched-union-id"},
+            id="mock-out-of-order-1",
+        )
+        time.sleep(5)  # 等全量事件被处理（让路）
+        mock.emit_group(
+            "后到的 @ 事件（同一 msg_id）",
+            event_type="GROUP_AT_MESSAGE_CREATE",
+            id="mock-out-of-order-1",
+        )
+        ooo_replied = wait_for(
+            lambda: any(
+                item["kind"] == "group" and item.get("msg_id") == "mock-out-of-order-1"
+                for item in mock.official_sent()[before:]
+            ),
+            timeout=45,
+        )
+        time.sleep(6)
+        ooo_replies = [
+            item
+            for item in mock.official_sent()[before:]
+            if item["kind"] == "group" and item.get("msg_id") == "mock-out-of-order-1"
+        ]
+        checker.check(
+            "全量事件先到且让路后，同一 msg_id 的 @ 事件仍会回复（不再吞消息）",
+            ooo_replied and len(ooo_replies) == 1,
+            "回复了 %d 次：%s" % (len(ooo_replies), str([str(r.get("content")) for r in ooo_replies])[:160]),
+        )
+
+        before = len(mock.official_sent())
+        mock.emit_group(
+            "@ 事件先到",
+            event_type="GROUP_AT_MESSAGE_CREATE",
+            id="mock-out-of-order-2",
+        )
+        wait_for(
+            lambda: any(
+                item["kind"] == "group" and item.get("msg_id") == "mock-out-of-order-2"
+                for item in mock.official_sent()[before:]
+            ),
+            timeout=45,
+        )
+        mock.emit_group(
+            "后到的全量重推（同一 msg_id）",
+            event_type="GROUP_MESSAGE_CREATE",
+            mention_appid=mock_servers.OFFICIAL_APP_ID,
+            mention_marker=False,
+            mention_is_you=True,
+            id="mock-out-of-order-2",
+        )
+        time.sleep(6)
+        ooo2 = [
+            item
+            for item in mock.official_sent()[before:]
+            if item["kind"] == "group" and item.get("msg_id") == "mock-out-of-order-2"
+        ]
+        checker.check(
+            "@ 事件先回复后，同 msg_id 的全量重推不再重复回复",
+            len(ooo2) == 1,
+            "回复了 %d 次" % len(ooo2),
+        )
+
         # ------------------------------------------------------------ 主动消息
         before = len(mock.official_sent())
         result = client.post("/api/proactive/trigger", json={"force": True}, timeout=120).json()

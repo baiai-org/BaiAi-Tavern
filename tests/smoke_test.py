@@ -749,6 +749,146 @@ def phase_unit_logic(c: Checker) -> None:
         "",
     )
 
+    # V0.2.2：平台 2026-09 起群 @ 消息 content 已去掉 @ 前缀，mentions 带 is_you /
+    # 多种身份字段 —— 全量模式下必须靠这些字段识别「@ 的是不是我」
+    c.check(
+        "全量群消息 mentions 里 is_you=True → 判定为 @ 了自己（新版平台格式，content 无 @ 占位）",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-5",
+                    "content": "你好呀",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                    "mentions": [{"id": "openid-bot-a", "bot": True, "is_you": True}],
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is True,
+        "",
+    )
+    c.check(
+        "全量群消息 mentions 的 user_openid 匹配自己的身份 → 判定为 @ 了自己",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-6",
+                    "content": "在吗",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                    "mentions": [{"id": "other-format-id", "bot": True, "user_openid": "app-a"}],
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is True,
+        "",
+    )
+    c.check(
+        "多身份（AppID + READY openid）任一匹配都算 @ 了自己",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-7",
+                    "content": "在吗",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                    "mentions": [{"id": "openid-from-ready", "bot": True}],
+                },
+            },
+            self_id="app-a",
+            self_ids=["app-a", "openid-from-ready"],
+        ).mentioned
+        is True,
+        "",
+    )
+    c.check(
+        "全量群消息 @ 了别的机器人（is_you 缺失 / 身份不匹配）→ 让路不回复",
+        parse_event(
+            {
+                "type": "GROUP_MESSAGE_CREATE",
+                "data": {
+                    "id": "msg-full-8",
+                    "content": "你好",
+                    "group_openid": "group-xyz",
+                    "author": {"member_openid": "member-1"},
+                    "mentions": [{"id": "openid-bot-b", "bot": True, "is_you": False}],
+                },
+            },
+            self_id="app-a",
+        ).mentioned
+        is False,
+        "",
+    )
+
+    # V0.2.2 回归修复：同一 msg_id 的 @ 事件与全量事件先后到达（顺序不保证），
+    # 去重不能把「先让路的全量事件」后到的 @ 事件吃掉，否则群 @ 彻底不回复
+    from bot.qq_official.receiver import OfficialReceiver
+
+    _dedupe_receiver = OfficialReceiver(runtime=None, bot=None)
+    c.check(
+        "先到的全量事件没 @ 自己（让路）→ 后到的 @ 事件仍要处理",
+        _dedupe_receiver._check_duplicate("dup-1", mentioned=False) is False
+        and _dedupe_receiver._check_duplicate("dup-1", mentioned=True) is False,
+        str(_dedupe_receiver._seen_messages),
+    )
+    c.check(
+        "标记已回复后，同 msg_id 的再推送一律忽略",
+        (_dedupe_receiver._mark_replied("dup-2"), _dedupe_receiver._check_duplicate("dup-2", mentioned=True) is True)[1],
+        str(_dedupe_receiver._seen_messages),
+    )
+    c.check(
+        "先到的事件就是 @ 自己（标记回复中）→ 同 msg_id 重推忽略",
+        _dedupe_receiver._check_duplicate("dup-3", mentioned=True) is False
+        and _dedupe_receiver._check_duplicate("dup-3", mentioned=True) is True,
+        str(_dedupe_receiver._seen_messages),
+    )
+    c.check(
+        "让路过两次的全量重推 → 第二次仍忽略",
+        _dedupe_receiver._check_duplicate("dup-4", mentioned=False) is False
+        and _dedupe_receiver._check_duplicate("dup-4", mentioned=False) is True,
+        str(_dedupe_receiver._seen_messages),
+    )
+
+    # V0.2.2：按机器人覆盖的生效段（全局 + 该机器人条目按键覆盖）
+    from common.bots import BotSpec, effective_section
+    from common.config import ConfigManager
+
+    _cfg = ConfigManager.__new__(ConfigManager)
+    _cfg.path = Path("<memory>:config.yaml")
+    _cfg._data = {
+        "proactive": {"enabled": True, "global_daily_limit": 10, "probability": 0.7},
+        "media": {"voice_reply_probability": 0.05, "image_style": "auto"},
+        "qq": {"id": "bot1", "name": "主号", "enabled": True, "character_id": ""},
+        "bots": [
+            {"id": "bot2", "name": "二号", "enabled": True, "character_id": "", "proactive": {"global_daily_limit": 3}},
+        ],
+    }
+    _specs = [
+        BotSpec(0, "qq", {"id": "bot1", "name": "主号", "enabled": True, "character_id": ""}),
+        BotSpec(1, "bots.0", {"id": "bot2", "name": "二号", "enabled": True, "character_id": "", "proactive": {"global_daily_limit": 3}}),
+    ]
+    c.check(
+        "生效段：机器人条目没覆盖的键回落到全局值",
+        effective_section(_cfg, _specs[1], "proactive").get("enabled") is True
+        and effective_section(_cfg, _specs[1], "proactive").get("probability") == 0.7,
+        str(effective_section(_cfg, _specs[1], "proactive")),
+    )
+    c.check(
+        "生效段：机器人条目覆盖的键用机器人自己的值",
+        effective_section(_cfg, _specs[1], "proactive").get("global_daily_limit") == 3,
+        str(effective_section(_cfg, _specs[1], "proactive")),
+    )
+    c.check(
+        "生效段：无覆盖的机器人拿到完整全局段",
+        effective_section(_cfg, _specs[0], "media") == {"voice_reply_probability": 0.05, "image_style": "auto"},
+        str(effective_section(_cfg, _specs[0], "media")),
+    )
+
     c.check(
         "官方错误码有可读提示（AppID/AppSecret 不正确）",
         "100016" in describe_error({"code": 100016, "message": "invalid appid or secret"})
@@ -1936,8 +2076,8 @@ def phase_unit_logic(c: Checker) -> None:
         str(_tts_spec.extra),
     )
     c.check(
-        "语音回复默认概率为 10%",
-        _cfg_mod.DEFAULTS["media"]["voice_reply_probability"] == 0.1,
+        "语音回复默认概率为 5%",
+        _cfg_mod.DEFAULTS["media"]["voice_reply_probability"] == 0.05,
     )
 
     # ---------------------------------------------------------- 百炼（DashScope）TTS 引擎

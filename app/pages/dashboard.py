@@ -127,7 +127,7 @@ class DashboardPage(Page):
         self.quota_bar.setValue(0)
         self.quota_bar.setTextVisible(False)
         usage_layout.addWidget(self.quota_bar)
-        self.quota_hint = hint_label("上限可在“主动消息”页面调整")
+        self.quota_hint = hint_label("上限可在“消息设置”页面调整")
         usage_layout.addWidget(self.quota_hint)
 
         self.breakdown = QTableWidget(0, 2)

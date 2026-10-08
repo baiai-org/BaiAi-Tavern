@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from common.bots import BotSpec, MODE_OFFICIAL, bot_specs
+from common.bots import BotSpec, MODE_OFFICIAL, bot_specs, effective_section
 from common.logging_setup import get_logger
 from common.utils import iso_now
 
@@ -99,6 +99,15 @@ class BotAccount:
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return "<BotAccount %s %s %s>" % (self.id, self.name, self.mode)
+
+    # ============================================================== 分段配置
+    def effective_proactive(self) -> Dict[str, Any]:
+        """本机器人主动消息设置的生效值（全局 + 本机器人覆盖）。"""
+        return effective_section(self.rt.config, self.spec, "proactive")
+
+    def effective_media(self) -> Dict[str, Any]:
+        """本机器人富媒体行为的生效值（全局 + 本机器人覆盖）。"""
+        return effective_section(self.rt.config, self.spec, "media")
 
     # ============================================================== 配置同步
     def apply_spec(self, spec: BotSpec) -> None:

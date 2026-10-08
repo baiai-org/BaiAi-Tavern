@@ -114,7 +114,15 @@ class MediaHub:
     def _config(self) -> Any:
         return self.rt.config
 
-    def _media_cfg(self, key: str, default: Any = None) -> Any:
+    def _media_cfg(self, key: str, default: Any = None, section: Any = None) -> Any:
+        """读富媒体配置。
+
+        ``section`` 是**某个机器人**的生效 media 段（全局 + 该机器人覆盖，
+        见 ``BotAccount.effective_media``）；不传则读全局配置。
+        """
+        if section is not None:
+            value = (section or {}).get(key)
+            return default if value is None else value
         return self._config().get("media.%s" % key, default)
 
     def enabled(self) -> bool:
@@ -129,14 +137,14 @@ class MediaHub:
         return load_slot(self._config(), slot)
 
     # ------------------------------------------------------------ 入站
-    async def inbound_media(self, incoming: Any) -> MediaInbound:
+    async def inbound_media(self, incoming: Any, section: Any = None) -> MediaInbound:
         """解析入站消息里的附件（图片 / 语音），下载并转写。"""
         result = MediaInbound()
         raw = getattr(incoming, "raw", None) or {}
         attachments = raw.get("attachments") if isinstance(raw, dict) else None
         if not isinstance(attachments, list) or not attachments:
             return result
-        if not bool(self._media_cfg("enabled", True)):
+        if not bool(self._media_cfg("enabled", True, section)):
             return result
 
         vision_on = self._spec(SLOT_VISION).configured
@@ -227,28 +235,28 @@ class MediaHub:
         return response.content
 
     # ------------------------------------------------------------ 出站：合成
-    def _image_marker_pattern(self) -> re.Pattern:
-        marker = str(self._media_cfg("image_marker", "[IMG]") or "[IMG]")
-        # 模型常把标记写在行尾/句中（不一定单独成行）：匹配到该行行尾即为绘图描述
-        return re.compile(r"%s[ \t\r\n]*(.+?)\s*$" % re.escape(marker.strip()), re.M)
-
-    def parse_image_prompt(self, content: str) -> "tuple[str, str]":
+    def parse_image_prompt(self, content: str, section: Any = None) -> "tuple[str, str]":
         """从回复里剥出 ``[IMG] 描述``，返回 ``(剩余文字, 绘图描述或空)``。"""
-        if not bool(self._media_cfg("allow_image", True)):
+        if not bool(self._media_cfg("allow_image", True, section)):
             return (content or "").strip(), ""
-        match = self._image_marker_pattern().search(content or "")
+        match = self._image_marker_pattern(section).search(content or "")
         if not match:
             return (content or "").strip(), ""
         prompt = match.group(1).strip()
         text = (content or "")[: match.start()] + (content or "")[match.end():]
         return text.strip(), prompt
 
-    def media_hint(self) -> str:
+    def _image_marker_pattern(self, section: Any = None) -> re.Pattern:
+        marker = str(self._media_cfg("image_marker", "[IMG]", section) or "[IMG]")
+        # 模型常把标记写在行尾/句中（不一定单独成行）：匹配到该行行尾即为绘图描述
+        return re.compile(r"%s[ \t\r\n]*(.+?)\s*$" % re.escape(marker.strip()), re.M)
+
+    def media_hint(self, section: Any = None) -> str:
         """写进系统提示词的多媒体约定（未配置时返回空）。"""
         parts: List[str] = []
         image_spec = self._spec(SLOT_IMAGE)
-        if bool(self._media_cfg("allow_image", True)) and image_spec.configured:
-            marker = str(self._media_cfg("image_marker", "[IMG]") or "[IMG]")
+        if bool(self._media_cfg("allow_image", True, section)) and image_spec.configured:
+            marker = str(self._media_cfg("image_marker", "[IMG]", section) or "[IMG]")
             parts.append(
                 "【发图】当你需要给对方看一张图时——对方让你画/发图，或你想用图表达"
                 "（风景、表情、你脑补的画面）——就在回复的最后一行写 %s <图里的内容描述>，"
@@ -257,23 +265,26 @@ class MediaHub:
             )
         return "\n".join(parts)
 
-    async def compose(self, character: Dict[str, Any], content: str) -> OutgoingReply:
-        """把角色的文字回复组装成完整出站消息（图 / 语音 / 纯文字）。"""
+    async def compose(self, character: Dict[str, Any], content: str, section: Any = None) -> OutgoingReply:
+        """把角色的文字回复组装成完整出站消息（图 / 语音 / 纯文字）。
+
+        ``section``：该机器人的生效 media 段（不传 = 全局）。
+        """
         out = OutgoingReply(text=(content or "").strip())
         out.body = (content or "").strip()
-        if not bool(self._media_cfg("enabled", True)):
+        if not bool(self._media_cfg("enabled", True, section)):
             return out
         content = (content or "").strip()
 
         # ------------------------------------------------------------ 图片
-        text, image_prompt = self.parse_image_prompt(content)
+        text, image_prompt = self.parse_image_prompt(content, section)
         if image_prompt:
             spec = self._spec(SLOT_IMAGE)
             if spec.configured:
                 try:
                     # 先按角色设定匹配画面风格（二次元角色 → 动漫风，真实角色 → 写实风），
-                    # 避免二次元角色画出来是真人照片
-                    override = str(self._media_cfg("image_style", "auto") or "auto").lower()
+                    # 避免二次元角色画出来是真人照片；风格可按机器人在「机器人」页单独设置
+                    override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
                     image_prompt, style = image_prompt_with_style(image_prompt, character, override)
                     if style:
                         log.info("生图风格按角色设定识别为 %s（%s）", style, character.get("name"))
@@ -292,7 +303,7 @@ class MediaHub:
                 text = (text + "（想给你看张图，但我现在还不会画）").strip()
 
         # ------------------------------------------------------------ 语音
-        if text and self._should_use_voice():
+        if text and self._should_use_voice(section):
             spec = self._spec(SLOT_TTS)
             tts = TTS(spec)
             if tts.available:
@@ -307,7 +318,7 @@ class MediaHub:
                 except AttributeError:  # pragma: no cover - 测试用的假 runtime
                     _chat_llm = None
                 try:
-                    chunks = self._split_voice_text(text)
+                    chunks = self._split_voice_text(text, section)
                     paths: List[str] = []
                     voice_format = "mp3"
                     for chunk in chunks:
@@ -373,17 +384,17 @@ class MediaHub:
                 pass
         return style
 
-    def _should_use_voice(self) -> bool:
+    def _should_use_voice(self, section: Any = None) -> bool:
         if not self._spec(SLOT_TTS).configured:
             return False
         try:
-            probability = float(self._media_cfg("voice_reply_probability", 0.0) or 0.0)
+            probability = float(self._media_cfg("voice_reply_probability", 0.0, section) or 0.0)
         except Exception:
             probability = 0.0
         return probability > 0 and random.random() < min(1.0, max(0.0, probability))
 
-    def _split_voice_text(self, text: str) -> List[str]:
-        limit = int(self._media_cfg("voice_max_chars", 180) or 180)
+    def _split_voice_text(self, text: str, section: Any = None) -> List[str]:
+        limit = int(self._media_cfg("voice_max_chars", 180, section) or 180)
         limit = max(20, limit)
         text = (text or "").strip()
         if len(text) <= limit:

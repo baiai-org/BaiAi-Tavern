@@ -147,6 +147,21 @@ class BotsPage(Page):
             return self._bots[self.current_index]
         return None
 
+    def _bot_media_entry(self, index: int, bot: Dict[str, Any]) -> Dict[str, Any]:
+        """该机器人条目里已单独设置的 media 覆盖段（没有则返回空 dict）。"""
+        try:
+            config = self.ctx.config
+            if int(index) <= 0:
+                value = (config.get("qq", {}) or {}).get("media")
+                return dict(value) if isinstance(value, dict) else {}
+            for item in config.get("bots", []) or []:
+                if isinstance(item, dict) and str(item.get("id") or "") == str(bot.get("id") or ""):
+                    value = item.get("media")
+                    return dict(value) if isinstance(value, dict) else {}
+        except Exception:  # pragma: no cover
+            pass
+        return {}
+
     def _render_detail(self) -> None:
         # 清空旧表单
         while self.form_layout.count():
@@ -212,6 +227,35 @@ class BotsPage(Page):
         )
         form.addRow(self.lbl_identity_hint)
         self.form_layout.addWidget(identity)
+
+        # ---------------------------------------------------------- 生图风格（按机器人）
+        style = make_group("生图风格")
+        style_form = QFormLayout(style)
+        style_form.setContentsMargins(14, 18, 14, 14)
+        self.combo_image_style = QComboBox(style)
+        self.combo_image_style.addItems(
+            ["auto（自动：按人设匹配，二次元出动漫风、真实角色出写实风）", "anime（动漫风）", "realistic（写实照片风）", "off（不附加风格）"]
+        )
+        # 回显该机器人的生效值：机器人自己设过的 → 全局 media.image_style → auto
+        _style = ""
+        try:
+            _media_entry = self._bot_media_entry(index, bot)
+            _style = str(_media_entry.get("image_style") or "").lower()
+            if _style not in ("auto", "anime", "realistic", "off"):
+                _style = str(config.get("media.image_style") or "auto").lower()
+                if _style not in ("auto", "anime", "realistic", "off"):
+                    _style = "auto"
+        except Exception:  # pragma: no cover
+            _style = "auto"
+        self.combo_image_style.setCurrentIndex({"auto": 0, "anime": 1, "realistic": 2, "off": 3}.get(_style, 0))
+        add_form_row(
+            style_form,
+            "角色发图风格",
+            self.combo_image_style,
+            "这个机器人回复里带 [IMG] 时生图用的画面风格；其他机器人的设置互不影响",
+            label_width=110,
+        )
+        self.form_layout.addWidget(style)
 
         # ---------------------------------------------------------- 连接
         connection = make_group("凭据与消息行为（%s）" % mode_label(bot.get("mode") or MODE_OFFICIAL))
@@ -330,6 +374,13 @@ class BotsPage(Page):
         values["character_name"] = (
             str(self.combo_character.currentText()) if character_id else ""
         )
+        # 生图风格按机器人单独存（覆盖全局 media.image_style）
+        if hasattr(self, "combo_image_style"):
+            values["media"] = {
+                "image_style": ("auto", "anime", "realistic", "off")[
+                    max(0, self.combo_image_style.currentIndex())
+                ]
+            }
         return values
 
     def _save(self) -> None:
