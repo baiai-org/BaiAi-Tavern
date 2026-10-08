@@ -2093,8 +2093,8 @@ def phase_unit_logic(c: Checker) -> None:
     )
     _styled, _style = image_prompt_with_style("一只在窗边喝茶的猫", _anime_char, "auto")
     c.check(
-        "二次元角色的绘图描述自动追加动漫风格短语",
-        _style == "anime" and "二次元动漫风格" in _styled and _styled.startswith("一只在窗边喝茶的猫"),
+        "二次元角色的绘图描述自动追加京阿尼风格短语",
+        _style == "anime" and "京阿尼" in _styled and _styled.startswith("一只在窗边喝茶的猫"),
         "style=%r prompt=%r" % (_style, _styled[:80]),
     )
     _styled2, _style2 = image_prompt_with_style("清晨的街头", _real_char, "auto")
@@ -2106,7 +2106,7 @@ def phase_unit_logic(c: Checker) -> None:
     _styled3, _style3 = image_prompt_with_style("一只猫", _neutral_char, "anime")
     c.check(
         "全局开关可强制指定风格（anime 覆盖 auto 识别结果）",
-        _style3 == "anime" and "二次元动漫风格" in _styled3,
+        _style3 == "anime" and "京阿尼" in _styled3,
         "style=%r" % _style3,
     )
     _styled4, _style4 = image_prompt_with_style("一只猫", _anime_char, "off")
@@ -2124,15 +2124,41 @@ def phase_unit_logic(c: Checker) -> None:
     _styled6, _style6 = image_prompt_with_style("一只在窗边喝茶的猫", _anime_char, "custom", "   ")
     c.check(
         "custom 但没填关键词时回落自动识别",
-        _style6 == "anime" and "二次元动漫风格" in _styled6,
+        _style6 == "anime" and "京阿尼" in _styled6,
         "style=%r prompt=%r" % (_style6, _styled6[:80]),
     )
-    # V0.2.2 第六批：主模型融合绘图描述 + 生图像素限制 1000×1000
+    # V0.2.2 第七批：风格（含自定义）也经主模型融合 + 明亮阳光光影基调
     from bot.media.images import (
+        _LIGHTING_CLAUSE,
         build_image_fuse_messages,
         clamp_image_size,
         fuse_image_prompt,
         parse_image_fuse,
+        resolve_style_text,
+    )
+
+    _anime_text, _anime_id = resolve_style_text(_anime_char, "anime")
+    _real_text, _real_id = resolve_style_text(_real_char, "realistic")
+    _custom_text, _custom_id = resolve_style_text(_anime_char, "custom", "吉卜力风格，水彩质感")
+    _off_text, _off_id = resolve_style_text(_anime_char, "off")
+    _auto_text, _auto_id = resolve_style_text(_anime_char, "auto")
+    _neutral_auto_text, _neutral_auto_id = resolve_style_text(_neutral_char, "auto")
+    c.check(
+        "resolve_style_text：anime→京阿尼 / realistic→写实 / custom→用户关键词 / off→空 / auto→按人设",
+        _anime_id == "anime" and "京阿尼" in _anime_text
+        and _real_id == "realistic" and "写实摄影风格" in _real_text
+        and _custom_id == "custom" and "吉卜力风格" in _custom_text
+        and _off_text == "" and _off_id == ""
+        and _auto_id == "anime" and "京阿尼" in _auto_text
+        and _neutral_auto_text == "" and _neutral_auto_id == "",
+        "anime=%r custom=%r auto=%r neutral=%r" % (_anime_id, _custom_id, _auto_id, _neutral_auto_id),
+    )
+    c.check(
+        "默认光影基调短语：无要求时白天阳光、打光明亮通透（条件式，主模型可用时由主模型判定）",
+        "阳光灿烂" in _LIGHTING_CLAUSE
+        and "明亮通透" in _LIGHTING_CLAUSE
+        and "没有明确" in _LIGHTING_CLAUSE,
+        _LIGHTING_CLAUSE,
     )
 
     _with_char = {
@@ -2142,12 +2168,31 @@ def phase_unit_logic(c: Checker) -> None:
     }
     _fused_msgs = build_image_fuse_messages("画一张我的照片", _with_char)
     c.check(
-        "融合消息：system 教融合规则，user 带角色描述/性格/背景与绘图描述",
+        "融合消息：system 教光影判定规则（无要求默认白天 / 有要求按要求，由主模型判定）",
         "绘图提示词写手" in _fused_msgs[0]["content"]
+        and "由你判定" in _fused_msgs[0]["content"]
+        and "默认白天" in _fused_msgs[0]["content"]
+        and "阳光灿烂" in _fused_msgs[0]["content"]
+        and "按要求" in _fused_msgs[0]["content"]
         and "不要" in _fused_msgs[0]["content"]
         and "粉色长发" in _fused_msgs[1]["content"]
         and "画一张我的照片" in _fused_msgs[1]["content"],
-        _fused_msgs[1]["content"][:120],
+        _fused_msgs[0]["content"][:200],
+    )
+    _fused_msgs2 = build_image_fuse_messages(
+        "画一张我的照片", _with_char, style_text="，画面风格：吉卜力风格，水彩质感"
+    )
+    c.check(
+        "融合消息：风格要求（含用户自定义关键词）一并交给主模型解释融合",
+        "画面风格要求：吉卜力风格，水彩质感" in _fused_msgs2[1]["content"]
+        and "解释" in _fused_msgs2[0]["content"],
+        _fused_msgs2[1]["content"][:120],
+    )
+    _fused_msgs3 = build_image_fuse_messages("画一张我的照片", _with_char, style_text=_anime_text)
+    c.check(
+        "融合消息：动漫风格要求带京阿尼风格短语",
+        "京阿尼" in _fused_msgs3[1]["content"],
+        _fused_msgs3[1]["content"][:160],
     )
     c.check(
         "融合输出清洗：围栏 / 前导语 / 引号 / 短标签首行都能剥掉",
@@ -2172,24 +2217,36 @@ def phase_unit_logic(c: Checker) -> None:
 
     _loop4 = asyncio.new_event_loop()
     try:
-        _fake_ok = _FakeFuseLLM("粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，柔和光影。")
-        _fused_prompt = _loop4.run_until_complete(
-            fuse_image_prompt(_fake_ok, "画一张我的照片", _with_char)
+        _fake_ok = _FakeFuseLLM("粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，白天阳光明亮。")
+        _fused_prompt, _fused_ok = _loop4.run_until_complete(
+            fuse_image_prompt(_fake_ok, "画一张我的照片", _with_char, style_text=_custom_text)
         )
         c.check(
-            "主模型融合成功：用融合后的完整描述替代原描述（人设细节进画面）",
-            _fused_prompt == "粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，柔和光影。"
-            and len(_fake_ok.calls) == 1,
-            "calls=%d prompt=%r" % (len(_fake_ok.calls), _fused_prompt[:60]),
+            "主模型融合成功：用融合后的完整描述替代原描述（人设 + 风格细节进画面）",
+            _fused_ok is True
+            and _fused_prompt == "粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，白天阳光明亮。"
+            and len(_fake_ok.calls) == 1
+            and "画面风格要求" in _fake_ok.calls[0],
+            "ok=%s calls=%d prompt=%r" % (_fused_ok, len(_fake_ok.calls), _fused_prompt[:60]),
         )
         _fake_bad = _FakeFuseLLM("")
-        _fused_bad = _loop4.run_until_complete(fuse_image_prompt(_fake_bad, "一只猫", _with_char))
-        c.check("融合输出为空时回落原描述（生图照常）", _fused_bad == "一只猫", repr(_fused_bad))
+        _fused_bad, _fused_bad_ok = _loop4.run_until_complete(fuse_image_prompt(_fake_bad, "一只猫", _with_char))
+        c.check(
+            "融合输出为空时回落原描述并标记未融合（生图照常）",
+            _fused_bad == "一只猫" and _fused_bad_ok is False,
+            "ok=%r" % _fused_bad_ok,
+        )
         _fake_unconf = _FakeFuseLLM("x", ok=False)
-        _fused_unconf = _loop4.run_until_complete(fuse_image_prompt(_fake_unconf, "一只猫", _with_char))
-        c.check("主模型未配置时跳过融合直接用原描述", _fused_unconf == "一只猫" and not _fake_unconf.calls, "")
-        _fused_none = _loop4.run_until_complete(fuse_image_prompt(None, "一只猫", _with_char))
-        c.check("没有主模型实例时跳过融合", _fused_none == "一只猫", "")
+        _fused_unconf, _fused_unconf_ok = _loop4.run_until_complete(
+            fuse_image_prompt(_fake_unconf, "一只猫", _with_char)
+        )
+        c.check(
+            "主模型未配置时跳过融合直接用原描述",
+            _fused_unconf == "一只猫" and _fused_unconf_ok is False and not _fake_unconf.calls,
+            "",
+        )
+        _fused_none, _fused_none_ok = _loop4.run_until_complete(fuse_image_prompt(None, "一只猫", _with_char))
+        c.check("没有主模型实例时跳过融合", _fused_none == "一只猫" and _fused_none_ok is False, "")
     finally:
         _loop4.close()
 

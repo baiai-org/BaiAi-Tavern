@@ -42,9 +42,10 @@ from . import store
 from .images import (
     ImageError,
     ImageGenerator,
+    _LIGHTING_CLAUSE,
     character_reference_clause,
     fuse_image_prompt,
-    image_prompt_with_style,
+    resolve_style_text,
 )
 from .instruct import (
     generate_qwen_audio_tags,
@@ -267,6 +268,8 @@ class MediaHub:
                 "【发图】当你需要给对方看一张图时——对方让你画/发图，或你想用图表达"
                 "（风景、表情、你脑补的画面）——就在回复的最后一行写 %s <图里的内容描述>，"
                 "系统会自动把它画出来发过去（描述具体一点，两三句话）。"
+                "描述默认写白天、阳光灿烂、明亮温暖的场景；如果语境里有明确的时间 / 光影要求"
+                "（夜晚、黄昏、烛光等），就按要求写，但打光写得明亮通透，别写昏暗压抑的氛围。"
                 "如果图里要出现你自己（对方要你的照片/自拍/立绘），描述里一定写上自己的"
                 "外貌与气质特征（系统会自动附带你的人设设定，画面会按人设生成你本人）。"
                 "只是普通聊天时不用加，别每条都发图。" % marker
@@ -290,28 +293,30 @@ class MediaHub:
             spec = self._spec(SLOT_IMAGE)
             if spec.configured:
                 try:
-                    # 绘图描述先经**主模型融合**：画面里有角色本人时，主模型按角色卡
-                    # 把外貌 / 气质细节写进描述（人设原文不直接丢给生图模型）；
-                    # 融合失败回落原描述，描述很短且角色有人设时再兜底拼角色参考段
+                    # 绘图描述 + 角色设定 + 画面风格（含用户自定义风格）+ 明亮阳光
+                    # 的光影基调，全部先经**主模型**汇总理解融合成完整描述，
+                    # 再丢给生图模型——不把任何人设 / 风格原文直接拼过去
+                    override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
+                    custom_keywords = str(self._media_cfg("image_style_custom", "", section) or "").strip()
+                    style_text, style = resolve_style_text(character, override, custom_keywords)
                     try:
                         _chat_llm = self.rt.engine.llm
                     except AttributeError:  # pragma: no cover - 测试用的假 runtime
                         _chat_llm = None
-                    fused = await fuse_image_prompt(_chat_llm, image_prompt, character)
-                    if fused != image_prompt:
+                    fused, fused_ok = await fuse_image_prompt(_chat_llm, image_prompt, character, style_text)
+                    if fused_ok:
                         image_prompt = fused
-                    elif not _chat_llm and len(image_prompt) <= 40:
-                        reference = character_reference_clause(character)
-                        if reference:
-                            image_prompt = image_prompt + reference
-                    # 画面风格（auto 按人设匹配 / anime / realistic / custom 自定义关键词 / off）
-                    override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
-                    custom_keywords = str(self._media_cfg("image_style_custom", "", section) or "").strip()
-                    image_prompt, style = image_prompt_with_style(
-                        image_prompt, character, override, custom_keywords
-                    )
-                    if style:
-                        log.info("生图风格：%s（%s）", style, character.get("name"))
+                        log.info("生图描述已由主模型融合（风格：%s / %s）", style or "未指定", character.get("name"))
+                    else:
+                        # 主模型不可用 / 融合失败 → 机械兜底：风格 + 角色参考（仅短描述）+ 明亮光影
+                        if style_text:
+                            image_prompt = image_prompt + style_text
+                        if len(image_prompt) <= 40:
+                            reference = character_reference_clause(character)
+                            if reference:
+                                image_prompt = image_prompt + reference
+                        image_prompt = image_prompt + _LIGHTING_CLAUSE
+                        log.info("生图走机械兜底（风格：%s）", style or "未指定")
                     gen = ImageGenerator(spec)
                     data, ext = await gen.generate(image_prompt)
                     out.image_path = str(store.save_outbox(data, ext))

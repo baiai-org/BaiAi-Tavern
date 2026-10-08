@@ -199,8 +199,18 @@ _REAL_KEYWORDS = (
     "杂志", "画报", "演员", "明星", "电影剧照", "电视剧",
 )
 
-_ANIME_CLAUSE = "，画面风格：二次元动漫风格，日系动漫插画，赛璐璐上色，线条干净"
+_ANIME_CLAUSE = (
+    "，画面风格：日本京都动画（京阿尼）风格——柔和通透的光影、温暖明亮的色调、"
+    "细腻干净的画功，人物绘制参考《轻音少女》《CLANNAD》《紫罗兰永恒花园》这类京阿尼作品"
+)
 _REAL_CLAUSE = "，画面风格：写实摄影风格，真实照片质感，自然光影，细节真实"
+
+#: 默认光影基调（机械兜底路径用，条件式写法——主模型可用时由主模型判定）：
+#: 没有明确要求时白天阳光，有明确要求时按要求，打光保持明亮不压抑
+_LIGHTING_CLAUSE = (
+    "，打光明亮通透：没有明确时间或光影要求时，用白天阳光灿烂的自然光、温暖明亮的色调；"
+    "避免昏暗、沉重、压抑的灯光"
+)
 
 
 def detect_character_style(character: Optional[Dict[str, Any]]) -> str:
@@ -245,6 +255,33 @@ def style_clause(style: str, custom_keywords: str = "") -> str:
     return ""
 
 
+def resolve_style_text(
+    character: Optional[Dict[str, Any]],
+    override: str = "auto",
+    custom_keywords: str = "",
+) -> Tuple[str, str]:
+    """按配置解析出**参与融合的风格要求文本**与风格标识。
+
+    返回值 ``(风格文本, 风格标识)``：
+    * ``anime`` → 京阿尼风格短语；``realistic`` → 写实摄影短语；
+    * ``custom`` → 用户自己写的风格关键词（原样交给主模型解释融合，
+      关键词为空时回落自动识别）；
+    * ``off`` → ``("", "")``；``auto`` / 未知 → 按角色人设自动识别。
+    """
+    override = str(override or "auto").lower()
+    if override in (STYLE_ANIME, STYLE_REALISTIC):
+        return style_clause(override), override
+    if override == STYLE_CUSTOM:
+        if (custom_keywords or "").strip():
+            return "，画面风格：%s" % custom_keywords.strip(), STYLE_CUSTOM
+        detected = detect_character_style(character)
+        return style_clause(detected), detected
+    if override == "off":
+        return "", ""
+    detected = detect_character_style(character)
+    return style_clause(detected), detected
+
+
 def character_reference_clause(character: Optional[Dict[str, Any]]) -> str:
     """角色参考段（**兜底用**）：画面里要画**角色本人**时按角色卡的描述与性格生成。
 
@@ -281,19 +318,32 @@ def _truncate(text: str, limit: int) -> str:
 
 
 _FUSE_SYSTEM_PROMPT = (
-    "你是绘图提示词写手。给你一段简短的绘图描述和一位角色的设定，"
-    "把它改写、扩写成生图模型能直接使用的完整画面描述。\n"
+    "你是绘图提示词写手。给你一段简短的绘图描述、一位角色的设定"
+    "（以及可选的画面风格要求），把它理解、解释、融合、扩写成生图模型"
+    "能直接使用的完整画面描述。\n"
     "【要求】\n"
     "1. 画面里要出现这个角色本人时（对方的照片 / 自拍 / 立绘 / 含 TA 的场景），"
     "必须把角色的外貌、发色、发型、体型、穿着、气质等具体细节写进画面描述；\n"
     "2. 画面与该角色无关时（风景、物品、表情图），**不要**强行加入角色；\n"
-    "3. 保留原描述的主体内容与构图，细节写实具体，不堆砌形容词；\n"
-    "4. 输出就是最终绘图描述本身：2~4 句中文，不加引号、不加前缀、不加解释、不分行。"
+    "3. 给了画面风格要求时，把它**解释成具体的画面要素**（光影、色调、质感、"
+    "线稿、渲染方式）自然写进描述——不要照抄关键词原文，不要出现"
+    "「风格：xxx」这种标签式写法；用户给的自定义风格关键词同样要解释融合，"
+    "例如「吉卜力风格，水彩质感」应展开成具体的光影与色彩描述；\n"
+    "4. 光影与氛围（由你判定）：原描述没有明确的时间 / 光影要求时，背景默认白天"
+    "——阳光灿烂、自然光、温暖明亮的色调、氛围明快通透；原描述有明确要求时"
+    "（夜晚、黄昏、烛光、雨夜等），时段与光影按要求来，但打光依然保持明亮通透，"
+    "不用昏暗、沉重、压抑的灯光；\n"
+    "5. 保留原描述的主体内容与构图，细节具体写实，不堆砌形容词；\n"
+    "6. 输出就是最终绘图描述本身：2~5 句中文，不加引号、不加前缀、不加解释、不分行。"
 )
 
 
-def build_image_fuse_messages(prompt: str, character: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """构造「简短绘图描述 + 角色设定 → 完整绘图描述」的主模型消息。"""
+def build_image_fuse_messages(
+    prompt: str,
+    character: Optional[Dict[str, Any]],
+    style_text: str = "",
+) -> List[Dict[str, str]]:
+    """构造「绘图描述 + 角色设定 + 风格要求 → 完整绘图描述」的主模型消息。"""
     character = character or {}
     name = str(character.get("name") or "").strip()
     description = str(character.get("description") or "").strip()
@@ -308,6 +358,12 @@ def build_image_fuse_messages(prompt: str, character: Optional[Dict[str, Any]]) 
         user_lines.append("角色性格：%s" % _truncate(personality, 300))
     if scenario:
         user_lines.append("角色背景：%s" % _truncate(scenario, 300))
+    if (style_text or "").strip():
+        # 剥掉上游自带的「，画面风格：」前缀，避免与下面的标签重复
+        _style = (style_text or "").strip().lstrip("，,、 ").strip()
+        _style = re.sub(r"^画面风格\s*[:：]\s*", "", _style).strip()
+        if _style:
+            user_lines.append("画面风格要求：%s" % _style)
     user_lines.append("绘图描述：%s" % _truncate(prompt, 500))
     return [
         {"role": "system", "content": _FUSE_SYSTEM_PROMPT},
@@ -361,37 +417,40 @@ async def fuse_image_prompt(
     llm: Any,
     prompt: str,
     character: Optional[Dict[str, Any]],
+    style_text: str = "",
     timeout: float = 30.0,
-) -> str:
-    """用**主模型**把简短绘图描述与角色设定融合成完整绘图描述。
+) -> Tuple[str, bool]:
+    """用**主模型**把绘图描述、角色设定与风格要求融合成完整绘图描述。
 
-    画面里有角色本人时，主模型按角色卡把外貌 / 气质细节写进描述（而不是把
-    人设原文机械拼到末尾）；失败 / 超时 / 输出为空时返回原描述，生图照常。
+    风格（含用户自定义关键词）、画面里角色本人的外貌细节、明亮阳光的光影
+    基调，都由主模型理解解释后写进最终描述——不再把任何原文机械拼给生图模型。
+    返回 ``(最终描述, 是否融合成功)``：失败 / 超时 / 输出为空时回落原描述
+    （``False``，调用方走机械兜底），生图不中断。
     """
     prompt = (prompt or "").strip()
     if llm is None or not prompt:
-        return prompt
+        return prompt, False
     try:
         if not llm.configured():
-            return prompt
+            return prompt, False
     except Exception:
-        return prompt
-    messages = build_image_fuse_messages(prompt, character)
+        return prompt, False
+    messages = build_image_fuse_messages(prompt, character, style_text)
     for attempt in range(2):
         try:
             raw = await asyncio.wait_for(llm.chat(messages, max_tokens=1024, temperature=0.4), timeout=timeout)
         except asyncio.TimeoutError:
             log.warning("绘图描述融合超时（%.0fs），用原描述生图", timeout)
-            return prompt
+            return prompt, False
         except Exception as exc:
             log.warning("绘图描述融合失败（用原描述生图）：%s", exc)
-            return prompt
+            return prompt, False
         fused = parse_image_fuse(raw)
         if fused:
-            return fused
+            return fused, True
         if attempt == 0:
             log.warning("绘图描述融合输出为空（思考类模型偶发），重试一次")
-    return prompt
+    return prompt, False
 
 
 def image_prompt_with_style(
