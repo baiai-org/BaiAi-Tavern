@@ -1768,10 +1768,10 @@ def main() -> int:
             and hasattr(bots_page.qq_form, "in_app_id"),
         )
         checker.check(
-            "机器人页带「生图风格」按机器人设置（auto/anime/realistic/custom/off）",
+            "机器人页带「生图风格」按机器人设置（anime 默认 / auto / realistic / custom / off）",
             hasattr(bots_page, "combo_image_style")
             and bots_page.combo_image_style.count() == 5
-            and bots_page.combo_image_style.currentIndex() == 0,
+            and bots_page.combo_image_style.currentIndex() == 1,
             str(getattr(bots_page, "combo_image_style", None)),
         )
         checker.check(

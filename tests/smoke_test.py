@@ -27,6 +27,7 @@ import base64
 import io
 import json
 import os
+import random
 import subprocess
 import struct
 import sys
@@ -365,6 +366,12 @@ def phase_unit_logic(c: Checker) -> None:
     c.check("概率为 1 时允许发送", triggers.check_probability(config).allowed is True)
     c.check("概率为 0 时拒绝发送", triggers.check_probability(_Cfg({"proactive": {"probability": 0.0}})).allowed is False)
     c.check("强制发送时跳过概率判定", triggers.check_probability(_Cfg({"proactive": {"probability": 0.0}}), force=True).allowed is True)
+    _prob_default = triggers.check_probability(_Cfg({}), rng=random.Random(42))
+    c.check(
+        "触发概率未配置时默认 0.5（旧默认 0.7 已调整）",
+        "50%" in (_prob_default.reason or ""),
+        _prob_default.reason or str(_prob_default.allowed),
+    )
 
     candidates = [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}, {"id": "c", "name": "C"}]
     filtered = triggers.filter_candidates(candidates, config, {"a": 1}, "b")
@@ -396,6 +403,27 @@ def phase_unit_logic(c: Checker) -> None:
     c.check("清理 Markdown 图片链接", "![](" not in cleaned_md and "kammii" not in cleaned_md, cleaned_md)
     c.check("打字延迟有上限", typing_delay("a" * 500, cps=10, max_delay=5) <= 5.0)
 
+    # ---------------------------------------------------------- 日志按天滚动
+    import logging as _logging
+
+    from common.logging_setup import setup_logging as _setup_logging
+
+    _root_logger = _logging.getLogger()
+    _old_handlers = list(_root_logger.handlers)
+    try:
+        _setup_logging(name="smoke-rot", filename="smoke_rot.log", console=False, backup_count=3, force=True)
+        _timed = [h for h in _root_logger.handlers if isinstance(h, _logging.handlers.TimedRotatingFileHandler)]
+        c.check(
+            "日志按天分文件保存、只留最近 3 天（午夜滚动，backupCount=3 超期自动删除）",
+            len(_timed) == 1 and _timed[0].when.upper() == "MIDNIGHT" and _timed[0].backupCount == 3,
+            str([(type(h).__name__, getattr(h, "when", ""), getattr(h, "backupCount", "")) for h in _root_logger.handlers]),
+        )
+    finally:
+        for h in list(_root_logger.handlers):
+            _root_logger.removeHandler(h)
+        for h in _old_handlers:
+            _root_logger.addHandler(h)
+
     # ---------------------------------------------------------- 提示词
     from bot.ai_engine.prompt_builder import build_proactive_messages, build_system_prompt
 
@@ -407,6 +435,13 @@ def phase_unit_logic(c: Checker) -> None:
     c.check("提示词替换 {{char}}", "深夜角色" in system_prompt and "{{char}}" not in system_prompt)
     c.check("提示词替换 {{user}}", "小可爱" in system_prompt and "{{user}}" not in system_prompt)
     c.check("提示词包含长期记忆", "喜欢深夜写代码" in system_prompt)
+    c.check(
+        "行为规则：单条消息保持日常聊天长度——一般一句话（提示词注入实现，不限 TOKEN）",
+        "一般就一句话" in system_prompt
+        and "一次只说一件事" in system_prompt
+        and "揉在同一条里" in system_prompt,
+        system_prompt[-400:],
+    )
     # Chub 卡片会把整张展示页 HTML 塞进 creator_notes（V2 规范：不进 prompt）
     html_notes = (
         '<div style="max-width: 100%;"><style>body::before{content:""}</style>'
@@ -1029,6 +1064,37 @@ def phase_unit_logic(c: Checker) -> None:
         "旧配置的 providers.asr 段启动时自动清理",
         "providers.asr" in _removed and "asr" not in (_cleaned.get("providers") or {}),
         str(_removed),
+    )
+    from common.config import DEFAULTS
+
+    c.check(
+        "新安装默认：生图风格 anime / 主动消息触发概率 0.5",
+        DEFAULTS["media"]["image_style"] == "anime" and DEFAULTS["proactive"]["probability"] == 0.5,
+        "%s / %s" % (DEFAULTS["media"]["image_style"], DEFAULTS["proactive"]["probability"]),
+    )
+    _migrated, _m_removed = strip_legacy_keys(
+        {"media": {"image_style": "auto"}, "proactive": {"probability": 0.7}}
+    )
+    c.check(
+        "旧安装默认值一次性迁移：image_style auto→anime / probability 0.7→0.5（含迁移标记）",
+        (_migrated.get("media") or {}).get("image_style") == "anime"
+        and (_migrated.get("proactive") or {}).get("probability") == 0.5
+        and bool((_migrated.get("app") or {}).get("v022_defaults_applied")),
+        str(_m_removed),
+    )
+    _m_kept, _m_kept_removed = strip_legacy_keys(
+        {
+            "app": {"v022_defaults_applied": True},
+            "media": {"image_style": "auto"},
+            "proactive": {"probability": 0.7},
+        }
+    )
+    c.check(
+        "打过迁移标记后用户显式选择旧值则保留",
+        (_m_kept.get("media") or {}).get("image_style") == "auto"
+        and (_m_kept.get("proactive") or {}).get("probability") == 0.7
+        and not _m_kept_removed,
+        str(_m_kept_removed),
     )
     c.check(
         "tts 槽位不接受 local 引擎（缺省回退到推荐引擎 dashscope）",

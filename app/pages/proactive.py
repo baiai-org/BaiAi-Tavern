@@ -230,11 +230,11 @@ class ProactivePage(Page):
         self.spin_global = _spin(config.get("proactive.global_daily_limit", 10), 0, 200, " 条/天")
         self.spin_per_character = _spin(config.get("proactive.per_character_daily_limit", 3), 0, 100, " 条/天")
         self.spin_min_interval = _spin(config.get("proactive.min_interval_minutes", 30), 0, 1440, " 分钟")
-        self.dspin_probability = _dspin(config.get("proactive.probability", 0.7), 0.0, 1.0, 0.05)
+        self.dspin_probability = _dspin(config.get("proactive.probability", 0.5), 0.0, 1.0, 0.05)
         add_form_row(limits_form, "全局每日上限", self.spin_global, "0 表示不限制（按单个机器人独立计算）")
         add_form_row(limits_form, "单角色每日上限", self.spin_per_character, "0 表示不限制")
         add_form_row(limits_form, "最小间隔", self.spin_min_interval, "两次主动消息之间至少间隔多久（按单个机器人独立计算）")
-        add_form_row(limits_form, "触发概率", self.dspin_probability, "满足条件后真正发送的概率，0.7 表示 70%")
+        add_form_row(limits_form, "触发概率", self.dspin_probability, "满足条件后真正发送的概率，0.5 表示 50%")
         layout.addWidget(limits)
 
         # ------------------------------------------------------------ 消息行为
@@ -474,7 +474,7 @@ class ProactivePage(Page):
         self.spin_global.setValue(int(proactive.get("global_daily_limit", 10) or 0))
         self.spin_per_character.setValue(int(proactive.get("per_character_daily_limit", 3) or 0))
         self.spin_min_interval.setValue(int(proactive.get("min_interval_minutes", 30) or 0))
-        self.dspin_probability.setValue(float(proactive.get("probability", 0.7) or 0.7))
+        self.dspin_probability.setValue(float(proactive.get("probability", 0.5) or 0.5))
         self.chk_avoid_repeat.setChecked(bool(proactive.get("avoid_repeat", True)))
         self.chk_include_memory.setChecked(bool(proactive.get("include_memory", True)))
         self.spin_max_chars.setValue(int(proactive.get("max_message_chars", 120) or 120))

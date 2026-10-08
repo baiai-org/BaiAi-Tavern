@@ -168,7 +168,7 @@ proactive:                       # ---------------- 主动消息 ---------------
   per_character_daily_limit: 3   # 单角色每日上限
   min_interval_minutes: 30       # 两次主动消息的最小间隔
   # 行为开关
-  probability: 0.7               # 满足条件后真正发送的概率（0-1）
+  probability: 0.5               # 满足条件后真正发送的概率（0-1，默认 0.5）
   avoid_repeat: true             # 避免连续由同一角色发言
   max_message_chars: 120         # 主动消息长度上限
   context_messages: 8            # 生成时携带的最近对话条数
@@ -194,6 +194,6 @@ api:                             # GUI 与 Bot 之间的控制接口
 
 logging:
   level: INFO                    # DEBUG / INFO / WARNING / ERROR
-  max_bytes: 2097152
-  backup_count: 3
+  max_bytes: 2097152             # 旧版按大小滚动的参数，按天滚动后不再使用（保留兼容）
+  backup_count: 3                # 日志按天分文件保存，只保留最近 N 天，超出的自动删除
   console: true                  # Bot 进程是否把日志打到控制台（打包后建议 false）

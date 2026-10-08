@@ -124,8 +124,8 @@ DEFAULTS: Dict[str, Any] = {
         "voice_max_chars": 180,        # 单条语音对应的文字上限，超过会拆成多条语音
         "image_marker": "[IMG]",       # 角色想发图时写在回复里的标记（后跟绘图描述）
         "temp_days": 3,                # 收发的临时媒体文件保留天数
-        # 生图风格：auto（按角色人设自动匹配，默认）/ anime / realistic / custom / off
-        "image_style": "auto",
+        # 生图风格：anime（默认）/ auto（按角色人设自动匹配）/ realistic / custom / off
+        "image_style": "anime",
         "image_style_custom": "",      # image_style=custom 时用户自己写的风格关键词
     },
     # 机器人列表：第 1 个机器人就是下面的 qq: 段，第 2..N 个写在这里
@@ -177,7 +177,7 @@ DEFAULTS: Dict[str, Any] = {
         "dnd_hours": {"enabled": True, "start": "23:00", "end": "08:00"},
         "global_daily_limit": 10,
         "per_character_daily_limit": 3,
-        "probability": 0.7,
+        "probability": 0.5,
         "avoid_repeat": True,
         "min_interval_minutes": 30,
         "max_message_chars": 120,
@@ -214,8 +214,8 @@ DEFAULTS: Dict[str, Any] = {
     },
     "logging": {
         "level": "INFO",
-        "max_bytes": 2097152,
-        "backup_count": 3,
+        "max_bytes": 2097152,  # 旧版按大小滚动的参数，按天滚动后不再使用（保留兼容）
+        "backup_count": 3,     # 日志按天分文件保存，只保留最近 N 天，超出的自动删除
         "console": True,
     },
 }
@@ -370,6 +370,24 @@ def strip_legacy_keys(raw: Dict[str, Any]) -> "tuple":
     if isinstance(providers, dict) and "asr" in providers:
         providers.pop("asr", None)
         removed.append("providers.asr")
+
+    # V0.2.2 第十二批：生图风格默认 anime、主动消息触发概率默认 0.5。
+    # 旧安装里落盘的还是旧默认值（image_style=auto / probability=0.7），
+    # 一次性迁移到新默认值（打过迁移标记后，用户再显式选择旧值就保留）
+    app = data.get("app")
+    if not (isinstance(app, dict) and app.get("v022_defaults_applied")):
+        media = data.get("media")
+        if isinstance(media, dict) and media.get("image_style") == "auto":
+            media["image_style"] = "anime"
+            removed.append("media.image_style（auto→anime，新默认值）")
+        proactive = data.get("proactive")
+        if isinstance(proactive, dict) and proactive.get("probability") == 0.7:
+            proactive["probability"] = 0.5
+            removed.append("proactive.probability（0.7→0.5，新默认值）")
+        if not isinstance(app, dict):
+            app = {}
+            data["app"] = app
+        app["v022_defaults_applied"] = True
 
     return data, removed
 

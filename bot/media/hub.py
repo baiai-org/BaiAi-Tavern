@@ -298,7 +298,7 @@ class MediaHub:
                     # 绘图描述 + 角色设定 + 画面风格（含用户自定义风格）+ 明亮阳光
                     # 的光影基调，全部先经**主模型**汇总理解融合成完整描述，
                     # 再丢给生图模型——不把任何人设 / 风格原文直接拼过去
-                    override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
+                    override = str(self._media_cfg("image_style", "anime", section) or "anime").lower()
                     custom_keywords = str(self._media_cfg("image_style_custom", "", section) or "").strip()
                     style_text, style = resolve_style_text(character, override, custom_keywords)
                     try:

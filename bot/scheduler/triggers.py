@@ -130,7 +130,7 @@ def character_over_limit(config: Any, per_character_counts: Dict[str, int], char
 def check_probability(config: Any, force: bool = False, rng: Optional[random.Random] = None) -> Decision:
     if force:
         return _ok()
-    probability = safe_float(config.get("proactive.probability", 0.7), 0.7)
+    probability = safe_float(config.get("proactive.probability", 0.5), 0.5)
     probability = max(0.0, min(1.0, probability))
     if probability >= 1.0:
         return _ok()

@@ -1,4 +1,9 @@
-"""日志初始化：同时输出到控制台与滚动文件。"""
+"""日志初始化：同时输出到控制台与按天滚动的日志文件。
+
+日志文件按天保存：当天写 ``data/logs/<name>.log``，每天午夜滚动为
+``<name>.log.YYYY-MM-DD``，只保留最近 ``backup_count`` 天（默认 3 天），
+更早的日志文件自动删除——日志不会无限增长。
+"""
 
 from __future__ import annotations
 
@@ -28,6 +33,10 @@ def setup_logging(
     """配置根 logger。
 
     ``name`` 同时决定默认日志文件名（``data/logs/<name>.log``）。
+    日志按天分文件保存，只保留最近 ``backup_count`` 天（默认 3 天），
+    超出的旧日志文件自动删除。
+
+    ``max_bytes`` 保留参数以兼容旧配置，按天滚动后不再使用。
     重复调用默认是幂等的，除非 ``force=True``。
     """
     root = logging.getLogger()
@@ -43,9 +52,12 @@ def setup_logging(
     try:
         logs_dir().mkdir(parents=True, exist_ok=True)
         log_file = logs_dir() / (filename or ("%s.log" % name))
-        file_handler = logging.handlers.RotatingFileHandler(
+        # 按天滚动：每天午夜切换文件（<name>.log.YYYY-MM-DD），
+        # backupCount=3 → 今天 + 最近 3 天，更早的旧文件自动删除
+        file_handler = logging.handlers.TimedRotatingFileHandler(
             str(log_file),
-            maxBytes=int(max_bytes),
+            when="midnight",
+            interval=1,
             backupCount=int(backup_count),
             encoding="utf-8",
         )
