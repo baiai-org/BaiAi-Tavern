@@ -148,7 +148,10 @@ class ConversationsPage(Page):
         media_row.addWidget(self.media_status, 1)
         chat_layout.addLayout(media_row)
         self.message_table.itemSelectionChanged.connect(self._on_message_selected)
-        self.message_table.itemClicked.connect(self._on_message_cell_clicked)
+        # itemClicked 只发一个参数（被点击的 item），必须拆成 row/column 再进处理函数
+        self.message_table.itemClicked.connect(
+            lambda item: self._on_message_cell_clicked(item.row(), item.column())
+        )
         self.btn_view_media.clicked.connect(self._view_selected_media)
         self.chat_hint = hint_label(
             "提示：最近 7 天的对话原文进上下文；更早的会压缩成摘要（15 天内）供角色回忆，"

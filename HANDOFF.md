@@ -883,6 +883,15 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
     `setSelectionBehavior(SelectRows)` + `_selected_media_row()` 改遍历
     全部选中索引按行找媒体（双保险）。教训：表格凡是「按行取数据」的
     逻辑，要么强制 SelectRows，要么别依赖 `selectedRows()` 的默认列。
+53. **`itemClicked` 只发一个参数（QTableWidgetItem\*），不是 (row, column)**：
+    直连 `itemClicked.connect(self._on_message_cell_clicked)`（处理函数签名
+    是 `(row, column)`）→ 点任何普通格子就 `TypeError: missing 1 required
+    positional argument`（真机点时间列/角色列选消息时必炸；点缩略图/徽标
+    走的是单元格控件自己的 mousePressEvent，不经过 itemClicked，所以此前
+    一直没触发）。修法：`lambda item: handler(item.row(), item.column())`。
+    教训：Qt 的 item* 信号参数都是 item 而不是行号列号，连 (row, column)
+    签名的槽必须包一层拆参；gui_smoke 要真实点击**普通格子**（不只是
+    单元格控件）才能覆盖到这条路径。
 
 ---
 
@@ -907,9 +916,9 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
   切换设置 / 富媒体行为搬到「消息设置」、生图风格搬到「机器人」页按机器人设置 /
   语音概率默认 5% / 媒体单元格真实可点击，见坑 49）已在 mock 全链验证，
   待用户真实 QQ 验证 → `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`。
-  重新打包已完成（2026-10-08 第三批后）：`dist\BaiAi-Tavern V0.2.2.exe`（本地安装用）+
+  重新打包已完成（2026-10-08 第四批后）：`dist\BaiAi-Tavern V0.2.2.exe`（本地安装用）+
   无空格发布副本 `dist\BaiAi-Tavern-V0.2.2.exe`（SHA256
-  `AE49370E4CD11C4EB70D849DE3F7995756C7DBE1C02EAB172331BD73C0250C92`，
+  `1700EF9C4CA97646AF1E2C72273E33B895CB94B522D13231722CEEEEFABB6D97`，
   见 `dist\SHA256SUMS.txt`）+ 绿色版 `dist\BaiAi-Tavern\`。
   上传 Release 用无空格副本 + SHA256SUMS.txt（octet-stream + `?name=`，见坑 10）。
   真机重点看（第三批）：**对话页点「角色」列选中消息后「查看 / 播放」按钮是否可用**、

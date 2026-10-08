@@ -1197,6 +1197,32 @@ def main() -> int:
                         conversations_page.btn_view_media.isEnabled(),
                         "row=%d" % target,
                     )
+                # V0.2.2 回归：真实点击普通格子（时间列）会触发 itemClicked，
+                # 该信号只发一个 item 参数——直连 (row, column) 处理函数会
+                # TypeError。现在必须正常选中该行且不抛异常
+                from PySide6.QtTest import QTest as _QTest
+
+                _plain_row = None
+                for r in range(table.rowCount()):
+                    ti = table.item(r, 0)
+                    if ti is not None and str(ti.data(Qt.UserRole + 1) or "text") == "text":
+                        _plain_row = r
+                        break
+                if _plain_row is None:
+                    _plain_row = target
+                _rect = table.visualItemRect(table.item(_plain_row, 0))
+                if not _rect.isNull():
+                    table.clearSelection()
+                    _QTest.mouseClick(
+                        table.viewport(), Qt.LeftButton, Qt.NoModifier, _rect.center()
+                    )
+                    pump(app, 0.3)
+                    checker.check(
+                        "真实点击普通格子（时间列）能选中该行且不报错",
+                        table.currentRow() == _plain_row,
+                        "clicked=%s current=%s"
+                        % (_plain_row, table.currentRow()),
+                    )
                 # V0.2.2 修复：setCellWidget 的缩略图/徽标此前吃掉鼠标事件、
                 # 点了没反应。现在容器自己响应左键 —— 用真实鼠标点击验证
                 from PySide6.QtTest import QTest as _QTest
