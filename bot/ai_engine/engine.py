@@ -240,7 +240,7 @@ class AIEngine:
         if store:
             await self.short.append(character_id, "assistant", content)
             await self.extract_memory(character_id, user_text)
-        log.info("角色 [%s] 回复: %s", character.get("name"), truncate(content, 40))
+        log.info("角色 [%s] 回复: %s", character.get("name"), content)
         return content
 
     # ---------------------------------------------------------------- 主动消息
@@ -270,7 +270,7 @@ class AIEngine:
                 "角色 [%s] 主动消息(%s): %s",
                 character.get("name"),
                 trigger_type,
-                truncate(content, 40),
+                content,
             )
             return {"content": content, "degraded": False, "error": ""}
         except LLMError as exc:

@@ -436,10 +436,11 @@ def phase_unit_logic(c: Checker) -> None:
     c.check("提示词替换 {{user}}", "小可爱" in system_prompt and "{{user}}" not in system_prompt)
     c.check("提示词包含长期记忆", "喜欢深夜写代码" in system_prompt)
     c.check(
-        "行为规则：单条消息保持日常聊天长度——一般一句话（提示词注入实现，不限 TOKEN）",
-        "一般就一句话" in system_prompt
-        and "一次只说一件事" in system_prompt
-        and "揉在同一条里" in system_prompt,
+        "行为规则：每条回复只写一句话、不许换行、句末之后不许再有内容（提示词注入，不限 TOKEN）",
+        "只写一句话" in system_prompt
+        and "不许用换行" in system_prompt
+        and "结尾标点" in system_prompt
+        and "示例对话" in system_prompt,
         system_prompt[-400:],
     )
     # Chub 卡片会把整张展示页 HTML 塞进 creator_notes（V2 规范：不进 prompt）
@@ -3692,6 +3693,19 @@ def _run_e2e_checks(
 
     # ------------------------------------------------------------- 日志与退出
     log_file = data_dir / "logs" / "bot.log"
+    # 日志完整记录：角色回复不再截断成前 40 字
+    _long_reply = "今天有点累，想找你聊聊天，顺便问问你晚饭都吃了些什么呀。"
+    mock.reset(reply_text=_long_reply, proactive_text="突然有点想你了。")
+    mock.emit_c2c("这条消息用来验证日志完整记录回复")
+    c.check(
+        "回复日志完整记录全文（不再截断成前 40 字）",
+        wait_for(
+            lambda: log_file.exists()
+            and _long_reply in log_file.read_text(encoding="utf-8", errors="replace"),
+            timeout=45,
+        ),
+        "",
+    )
     c.check("生成 Bot 日志文件", log_file.exists())
     if log_file.exists():
         content = log_file.read_text(encoding="utf-8", errors="replace")

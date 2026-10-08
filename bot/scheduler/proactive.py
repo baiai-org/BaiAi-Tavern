@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from common.async_utils import LoopSafeLock
 from common.logging_setup import get_logger
-from common.utils import iso_now, now, parse_hhmm, seconds_since, truncate
+from common.utils import iso_now, now, parse_hhmm, seconds_since
 
 from ..database import crud
 from . import triggers
@@ -626,7 +626,7 @@ class ProactiveScheduler:
             bot.mode_label,
             peer.peer_id,
             character.get("name"),
-            truncate(content, 50),
+            content,
         )
         self.rt.publish({"type": "proactive_sent", **result})
         return result

@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from common.logging_setup import get_logger
-from common.utils import truncate
 
 from .ai_engine import REPLY_FALLBACK
 from .database import crud
@@ -148,7 +147,7 @@ async def handle_incoming(
         "群聊" if incoming.is_group else "私聊",
         incoming.peer_id,
         ("（机器人：%s）" % getattr(bot, "name", "")) if bot is not None else "",
-        truncate(user_text or "（图片/语音消息）", 60),
+        user_text or "（图片/语音消息）",
     )
 
     hint = ""
