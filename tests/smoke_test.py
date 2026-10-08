@@ -1553,7 +1553,7 @@ def phase_unit_logic(c: Checker) -> None:
             and _omni_state["chat_calls"] == 3
             and isinstance(_omni_state["last_extra_body"], dict)
             and int(_omni_state["last_extra_body"].get("num_outputs_per_prompt") or 0) == 1
-            and int(_omni_state["last_extra_body"].get("height") or 0) == 1024,
+            and int(_omni_state["last_extra_body"].get("height") or 0) == 1000,
             "chat_calls=%d extra_body=%s"
             % (_omni_state["chat_calls"], json.dumps(_omni_state["last_extra_body"])),
         )
@@ -2072,29 +2072,116 @@ def phase_unit_logic(c: Checker) -> None:
         _style6 == "anime" and "二次元动漫风格" in _styled6,
         "style=%r prompt=%r" % (_style6, _styled6[:80]),
     )
-    from bot.media.images import character_reference_clause
+    # V0.2.2 第六批：主模型融合绘图描述 + 生图像素限制 1000×1000
+    from bot.media.images import (
+        build_image_fuse_messages,
+        clamp_image_size,
+        fuse_image_prompt,
+        parse_image_fuse,
+    )
 
     _with_char = {
         "name": "苏苏",
         "description": "粉色长发，水手服，眼睛是琥珀色的，总戴一顶针织帽。",
         "personality": "软萌、爱撒娇、怕黑",
     }
-    _ref = character_reference_clause(_with_char)
+    _fused_msgs = build_image_fuse_messages("画一张我的照片", _with_char)
     c.check(
-        "角色本人参考段：带人设描述与性格，并说明画面无关时不强加",
-        "苏苏" in _ref
-        and "粉色长发" in _ref
-        and "软萌" in _ref
-        and "不要强行加入" in _ref,
-        _ref[:120],
+        "融合消息：system 教融合规则，user 带角色描述/性格/背景与绘图描述",
+        "绘图提示词写手" in _fused_msgs[0]["content"]
+        and "不要" in _fused_msgs[0]["content"]
+        and "粉色长发" in _fused_msgs[1]["content"]
+        and "画一张我的照片" in _fused_msgs[1]["content"],
+        _fused_msgs[1]["content"][:120],
     )
-    _ref2 = character_reference_clause({"name": "只写名字", "description": "", "personality": ""})
-    c.check("角色卡没有描述/性格时不加参考段（避免稀释提示词）", _ref2 == "", repr(_ref2))
-    _ref3 = character_reference_clause(None)
-    c.check("没有角色信息时不加参考段", _ref3 == "", repr(_ref3))
-    _long_desc = "长" * 300
-    _ref4 = character_reference_clause({"name": "测试", "description": _long_desc, "personality": ""})
-    c.check("参考段里的描述会被截断（不把整段人设灌进绘图提示词）", len(_ref4) < 300, "len=%d" % len(_ref4))
+    c.check(
+        "融合输出清洗：围栏 / 前导语 / 引号 / 短标签首行都能剥掉",
+        parse_image_fuse('```n"最终绘图描述：粉色长发少女站在水手服里"') == "粉色长发少女站在水手服里"
+        and parse_image_fuse("好的，绘图描述是：「月下街道」") == "月下街道"
+        and parse_image_fuse("") == "",
+        repr(parse_image_fuse("好的，绘图描述是：「月下街道」")),
+    )
+
+    class _FakeFuseLLM:
+        def __init__(self, reply: str, ok: bool = True) -> None:
+            self._reply = reply
+            self._ok = ok
+            self.calls: List[str] = []
+
+        def configured(self) -> bool:
+            return self._ok
+
+        async def chat(self, messages, **kwargs):
+            self.calls.append(str(messages[1].get("content") or ""))
+            return self._reply
+
+    _loop4 = asyncio.new_event_loop()
+    try:
+        _fake_ok = _FakeFuseLLM("粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，柔和光影。")
+        _fused_prompt = _loop4.run_until_complete(
+            fuse_image_prompt(_fake_ok, "画一张我的照片", _with_char)
+        )
+        c.check(
+            "主模型融合成功：用融合后的完整描述替代原描述（人设细节进画面）",
+            _fused_prompt == "粉色长发少女穿着水手服站在樱花树下，琥珀色眼睛，戴针织帽，柔和光影。"
+            and len(_fake_ok.calls) == 1,
+            "calls=%d prompt=%r" % (len(_fake_ok.calls), _fused_prompt[:60]),
+        )
+        _fake_bad = _FakeFuseLLM("")
+        _fused_bad = _loop4.run_until_complete(fuse_image_prompt(_fake_bad, "一只猫", _with_char))
+        c.check("融合输出为空时回落原描述（生图照常）", _fused_bad == "一只猫", repr(_fused_bad))
+        _fake_unconf = _FakeFuseLLM("x", ok=False)
+        _fused_unconf = _loop4.run_until_complete(fuse_image_prompt(_fake_unconf, "一只猫", _with_char))
+        c.check("主模型未配置时跳过融合直接用原描述", _fused_unconf == "一只猫" and not _fake_unconf.calls, "")
+        _fused_none = _loop4.run_until_complete(fuse_image_prompt(None, "一只猫", _with_char))
+        c.check("没有主模型实例时跳过融合", _fused_none == "一只猫", "")
+    finally:
+        _loop4.close()
+
+    # 像素限制：请求尺寸钳制
+    c.check(
+        "clamp_image_size：默认 1024x1024 钳到 1000x1000，横图等比缩放，小图不变",
+        clamp_image_size("1024x1024") == "1000x1000"
+        and clamp_image_size("1536x1024") == "1000x667"
+        and clamp_image_size("1200x800") == "1000x667"
+        and clamp_image_size("800x600") == "800x600"
+        and clamp_image_size("abc") == "abc"
+        and clamp_image_size("") == "",
+        "1024->%s 1536->%s" % (clamp_image_size("1024x1024"), clamp_image_size("1536x1024")),
+    )
+    # 像素限制：返回图片缩放
+    from bot.media.images import _downscale_if_needed, MAX_IMAGE_PIXEL
+
+    import io as _io
+
+    from PIL import Image as _PILImage
+
+    _big_buf = _io.BytesIO()
+    _PILImage.new("RGB", (1200, 900), (200, 30, 30)).save(_big_buf, format="PNG")
+    _small_buf = _io.BytesIO()
+    _PILImage.new("RGB", (800, 600), (30, 200, 30)).save(_small_buf, format="PNG")
+    _scaled_data, _scaled_ext = _downscale_if_needed(_big_buf.getvalue(), "png")
+    with _PILImage.open(_io.BytesIO(_scaled_data)) as _scaled_img:
+        _sw, _sh = _scaled_img.size
+    c.check(
+        "返回图片超过 1000×1000 时等比缩放（1200x900 → 1000x750）",
+        max(_sw, _sh) <= MAX_IMAGE_PIXEL and (_sw, _sh) == (1000, 750) and _scaled_ext == "png",
+        "scaled=%dx%d" % (_sw, _sh),
+    )
+    _kept_data, _kept_ext = _downscale_if_needed(_small_buf.getvalue(), "png")
+    c.check("返回图片不超限时原样返回", _kept_data == _small_buf.getvalue(), "ext=%s" % _kept_ext)
+    _jpg_buf = _io.BytesIO()
+    _PILImage.new("RGB", (1024, 1024), (10, 10, 10)).save(_jpg_buf, format="JPEG")
+    _scaled_jpg, _scaled_jpg_ext = _downscale_if_needed(_jpg_buf.getvalue(), "jpg")
+    with _PILImage.open(_io.BytesIO(_scaled_jpg)) as _jpg_img:
+        _jw, _jh = _jpg_img.size
+    c.check(
+        "JPEG 大图同样缩放且保持 JPEG 编码",
+        max(_jw, _jh) <= MAX_IMAGE_PIXEL and _scaled_jpg[:3] == b"\xff\xd8\xff",
+        "scaled=%dx%d" % (_jw, _jh),
+    )
+    _garbage_out, _garbage_ext = _downscale_if_needed(b"not-an-image", "png")
+    c.check("不是图片的字节缩放失败时原样返回（不阻断生图）", _garbage_out == b"not-an-image", "")
 
     # ---------------------------------------------------------- TTS 风格参数
     from common.providers import ENGINE_EDGE_TTS

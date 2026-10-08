@@ -35,6 +35,62 @@ log = get_logger("bot.media.images")
 
 _DATA_URL_RE = re.compile(r"^data:image/[a-z0-9.+-]+;base64,(.+)$", re.S)
 
+#: 生图像素上限：宽 / 高都不超过 1000（请求尺寸钳制 + 返回图片缩放双保险）
+MAX_IMAGE_PIXEL = 1000
+
+
+def clamp_image_size(size: str, limit: int = MAX_IMAGE_PIXEL) -> str:
+    """把请求尺寸钳制到 ``limit × limit`` 以内（等比缩放，不改比例）。
+
+    生图像素限制在 1000×1000 以内：默认 1024×1024 会缩成 1000×1000，
+    1536×1024 会缩成 1000×667。解析不了的尺寸原样返回。
+    """
+    match = re.match(r"^\s*(\d+)\s*[xX*]\s*(\d+)\s*$", str(size or ""))
+    if not match:
+        return str(size or "")
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return str(size or "")
+    longest = max(width, height)
+    if longest > limit:
+        ratio = limit / float(longest)
+        width = max(1, int(round(width * ratio)))
+        height = max(1, int(round(height * ratio)))
+    return "%dx%d" % (width, height)
+
+
+def _downscale_if_needed(data: bytes, ext: str, limit: int = MAX_IMAGE_PIXEL) -> Tuple[bytes, str]:
+    """返回图片超过 ``limit × limit`` 时等比缩放到以内（PIL 失败原样返回）。"""
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            if max(image.size) <= limit:
+                return data, ext
+            original = image.size
+            ratio = limit / float(max(image.size))
+            new_size = (max(1, int(round(image.width * ratio))), max(1, int(round(image.height * ratio))))
+            image = image.resize(new_size, Image.LANCZOS)
+            buffer = io.BytesIO()
+            if ext == "jpg":
+                if image.mode not in ("RGB", "L"):
+                    image = image.convert("RGB")
+                image.save(buffer, format="JPEG", quality=92)
+            else:
+                if ext == "png" and image.mode not in ("RGB", "RGBA", "L"):
+                    image = image.convert("RGBA")
+                image.save(buffer, format="PNG")
+            log.info(
+                "生图 %dx%d 超过 %d×%d，已等比缩放为 %dx%d",
+                original[0], original[1], limit, limit, new_size[0], new_size[1],
+            )
+            return buffer.getvalue(), ext
+    except Exception as exc:
+        log.warning("生图返回缩放失败（按原尺寸发送）：%s", exc)
+    return data, ext
+
 
 class ImageError(RuntimeError):
     """图像生成 / 理解失败。"""
@@ -184,10 +240,11 @@ def style_clause(style: str, custom_keywords: str = "") -> str:
 
 
 def character_reference_clause(character: Optional[Dict[str, Any]]) -> str:
-    """角色参考段：画面里要画**角色本人**时，按角色卡的描述与性格生成人物。
+    """角色参考段（**兜底用**）：画面里要画**角色本人**时按角色卡的描述与性格生成。
 
-    返回追加到绘图描述末尾的条件句（画面无关该角色时不强行加入）；
-    角色卡没有描述/性格时返回空串（没有可参考的信息就不加，避免稀释提示词）。
+    正常路径走 :func:`fuse_image_prompt`（主模型融合人设进绘图描述）；
+    主模型不可用 / 融合失败且描述较短时，由调用方追加本段作为兜底。
+    返回追加到绘图描述末尾的条件句；角色卡没有描述 / 性格时返回空串。
     """
     if not isinstance(character, dict) or not character:
         return ""
@@ -215,6 +272,120 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+_FUSE_SYSTEM_PROMPT = (
+    "你是绘图提示词写手。给你一段简短的绘图描述和一位角色的设定，"
+    "把它改写、扩写成生图模型能直接使用的完整画面描述。\n"
+    "【要求】\n"
+    "1. 画面里要出现这个角色本人时（对方的照片 / 自拍 / 立绘 / 含 TA 的场景），"
+    "必须把角色的外貌、发色、发型、体型、穿着、气质等具体细节写进画面描述；\n"
+    "2. 画面与该角色无关时（风景、物品、表情图），**不要**强行加入角色；\n"
+    "3. 保留原描述的主体内容与构图，细节写实具体，不堆砌形容词；\n"
+    "4. 输出就是最终绘图描述本身：2~4 句中文，不加引号、不加前缀、不加解释、不分行。"
+)
+
+
+def build_image_fuse_messages(prompt: str, character: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """构造「简短绘图描述 + 角色设定 → 完整绘图描述」的主模型消息。"""
+    character = character or {}
+    name = str(character.get("name") or "").strip()
+    description = str(character.get("description") or "").strip()
+    personality = str(character.get("personality") or "").strip()
+    scenario = str(character.get("scenario") or "").strip()
+    user_lines: List[str] = []
+    if name:
+        user_lines.append("角色名字：%s" % name)
+    if description:
+        user_lines.append("角色描述：%s" % _truncate(description, 800))
+    if personality:
+        user_lines.append("角色性格：%s" % _truncate(personality, 300))
+    if scenario:
+        user_lines.append("角色背景：%s" % _truncate(scenario, 300))
+    user_lines.append("绘图描述：%s" % _truncate(prompt, 500))
+    return [
+        {"role": "system", "content": _FUSE_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(user_lines)},
+    ]
+
+
+def parse_image_fuse(raw: str) -> str:
+    """清洗主模型输出：围栏 / 前导语 / 引号 / 多行，取绘图描述正文。"""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text).strip()
+    _quotes = (('"', '"'), ("“", "”"), ("「", "」"), ("『", "』"))
+    # 先剥整体引号包裹（标记在引号内时，先剥引号标记匹配才干净）
+    for _ in range(2):
+        for open_q, close_q in _quotes:
+            if len(text) >= 2 and text.startswith(open_q) and text.endswith(close_q):
+                text = text[len(open_q) : -len(close_q)].strip()
+                break
+        else:
+            break
+    # 「（最终）绘图描述是…」标记：取出现位置之后的正文，之前是前导废话
+    marker = re.search(
+        r"(?:最终|改写后|扩写后|完整)?(?:绘图描述|画面描述|提示词|描述)\s*(?:是|为|如下|就是)?\s*[:：]\s*",
+        text,
+    )
+    if marker:
+        text = text[marker.end():]
+    # 剥掉正文首尾的引号（前导语剥掉后可能露出）
+    for _ in range(2):
+        for open_q, close_q in _quotes:
+            if text.startswith(open_q):
+                j = text.rfind(close_q)
+                if j >= len(text) - 1:
+                    inner = text[len(open_q) : j].strip()
+                    if inner:
+                        text = inner
+                        break
+        if not text:
+            break
+    lines = [ln.strip() for ln in re.split(r"[\n\r]+", text) if ln.strip()]
+    if len(lines) > 1 and len(lines[0]) <= 16 and lines[0].endswith(("：", ":")):
+        lines = lines[1:]
+    text = "\n".join(lines).strip()
+    text = re.sub(r"^\s*(?:-|•|\d+[.、)]\s*)", "", text).strip()
+    return _truncate(text, 500)
+
+
+async def fuse_image_prompt(
+    llm: Any,
+    prompt: str,
+    character: Optional[Dict[str, Any]],
+    timeout: float = 30.0,
+) -> str:
+    """用**主模型**把简短绘图描述与角色设定融合成完整绘图描述。
+
+    画面里有角色本人时，主模型按角色卡把外貌 / 气质细节写进描述（而不是把
+    人设原文机械拼到末尾）；失败 / 超时 / 输出为空时返回原描述，生图照常。
+    """
+    prompt = (prompt or "").strip()
+    if llm is None or not prompt:
+        return prompt
+    try:
+        if not llm.configured():
+            return prompt
+    except Exception:
+        return prompt
+    messages = build_image_fuse_messages(prompt, character)
+    for attempt in range(2):
+        try:
+            raw = await asyncio.wait_for(llm.chat(messages, max_tokens=1024, temperature=0.4), timeout=timeout)
+        except asyncio.TimeoutError:
+            log.warning("绘图描述融合超时（%.0fs），用原描述生图", timeout)
+            return prompt
+        except Exception as exc:
+            log.warning("绘图描述融合失败（用原描述生图）：%s", exc)
+            return prompt
+        fused = parse_image_fuse(raw)
+        if fused:
+            return fused
+        if attempt == 0:
+            log.warning("绘图描述融合输出为空（思考类模型偶发），重试一次")
+    return prompt
 
 
 def image_prompt_with_style(
@@ -442,6 +613,8 @@ class ImageGenerator:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ImageError("绘图描述为空")
+        # 生图像素限制在 1000×1000 以内：请求尺寸先钳制（默认 1024x1024 → 1000x1000）
+        size = clamp_image_size(size)
 
         forced = str(spec.extra.get("image_api") or "").strip().lower()
         order: List[str] = []
@@ -462,12 +635,15 @@ class ImageGenerator:
         for mode in order:
             try:
                 if mode == "images":
-                    return await self._via_images(prompt, size)
-                if mode == "gemini":
-                    return await self._via_gemini_native(prompt)
-                if mode == "dashscope":
-                    return await self._via_dashscope_native(prompt, size)
-                return await self._via_chat(prompt, size)
+                    data, ext = await self._via_images(prompt, size)
+                elif mode == "gemini":
+                    data, ext = await self._via_gemini_native(prompt)
+                elif mode == "dashscope":
+                    data, ext = await self._via_dashscope_native(prompt, size)
+                else:
+                    data, ext = await self._via_chat(prompt, size)
+                # 双保险：模型不听话返回了更大的图，等比缩到 1000×1000 以内
+                return _downscale_if_needed(data, ext)
             except ImageError as exc:
                 last_error = str(exc)
                 log.info("图像生成 %s 方式失败，尝试下一种：%s", mode, last_error)

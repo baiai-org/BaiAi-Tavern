@@ -39,7 +39,13 @@ from common.providers import (
 )
 
 from . import store
-from .images import ImageError, ImageGenerator, character_reference_clause, image_prompt_with_style
+from .images import (
+    ImageError,
+    ImageGenerator,
+    character_reference_clause,
+    fuse_image_prompt,
+    image_prompt_with_style,
+)
 from .instruct import (
     generate_qwen_audio_tags,
     generate_tts_instruction,
@@ -284,9 +290,21 @@ class MediaHub:
             spec = self._spec(SLOT_IMAGE)
             if spec.configured:
                 try:
-                    # 先按角色设定匹配画面风格（二次元角色 → 动漫风，真实角色 → 写实风，
-                    # 也可按机器人设成自定义关键词），避免二次元角色画出来是真人照片；
-                    # 风格在「机器人」页 / 「消息设置」页按机器人单独设置
+                    # 绘图描述先经**主模型融合**：画面里有角色本人时，主模型按角色卡
+                    # 把外貌 / 气质细节写进描述（人设原文不直接丢给生图模型）；
+                    # 融合失败回落原描述，描述很短且角色有人设时再兜底拼角色参考段
+                    try:
+                        _chat_llm = self.rt.engine.llm
+                    except AttributeError:  # pragma: no cover - 测试用的假 runtime
+                        _chat_llm = None
+                    fused = await fuse_image_prompt(_chat_llm, image_prompt, character)
+                    if fused != image_prompt:
+                        image_prompt = fused
+                    elif not _chat_llm and len(image_prompt) <= 40:
+                        reference = character_reference_clause(character)
+                        if reference:
+                            image_prompt = image_prompt + reference
+                    # 画面风格（auto 按人设匹配 / anime / realistic / custom 自定义关键词 / off）
                     override = str(self._media_cfg("image_style", "auto", section) or "auto").lower()
                     custom_keywords = str(self._media_cfg("image_style_custom", "", section) or "").strip()
                     image_prompt, style = image_prompt_with_style(
@@ -294,10 +312,6 @@ class MediaHub:
                     )
                     if style:
                         log.info("生图风格：%s（%s）", style, character.get("name"))
-                    # 画面里要画角色本人时，按角色卡的描述与性格生成人物
-                    reference = character_reference_clause(character)
-                    if reference:
-                        image_prompt = image_prompt + reference
                     gen = ImageGenerator(spec)
                     data, ext = await gen.generate(image_prompt)
                     out.image_path = str(store.save_outbox(data, ext))
