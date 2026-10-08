@@ -19,6 +19,8 @@ try:
 except Exception:  # pragma: no cover - 依赖缺失时给出明确提示
     AsyncOpenAI = None  # type: ignore
 
+_UNSET = object()
+
 
 class LLMError(RuntimeError):
     """LLM 调用失败（网络、鉴权、超时、返回为空等）。"""
@@ -141,21 +143,29 @@ class LLMClient:
         payload: Dict[str, Any] = {
             "model": overrides.get("model") or self.model,
             "messages": [dict(item) for item in messages],
-            "max_tokens": int(overrides.get("max_tokens") or self.max_tokens),
             "temperature": float(
                 self.temperature if overrides.get("temperature") is None else overrides["temperature"]
             ),
             "top_p": float(self.top_p if overrides.get("top_p") is None else overrides["top_p"]),
         }
+        # max_tokens：不传 → 用配置值；显式 None → 不发送该参数（服务端用自己的
+        # 默认上限，客户端不限制模型输出长度——融合类长输出调用用它）
+        max_tokens_override = overrides.get("max_tokens", _UNSET)
+        if max_tokens_override is _UNSET:
+            payload["max_tokens"] = int(self.max_tokens)
+        elif max_tokens_override is not None:
+            payload["max_tokens"] = int(max_tokens_override or self.max_tokens)
         if overrides.get("stop"):
             payload["stop"] = overrides["stop"]
 
         last_error = ""
         # 推理类模型（vLLM reasoning 字段）会先消耗思考 token 再输出正文；
         # 长度不够时正文为空——重试时把长度翻倍，比同参数重试更可能成功
-        attempt_max_tokens = payload["max_tokens"]
+        # （未发送 max_tokens 时没有可翻倍的值，重试即原样重发）
+        attempt_max_tokens = payload.get("max_tokens")
         for attempt in range(self.max_retries + 1):
-            payload["max_tokens"] = attempt_max_tokens
+            if attempt_max_tokens is not None:
+                payload["max_tokens"] = attempt_max_tokens
             try:
                 client = self._ensure_client()
                 response = await client.chat.completions.create(**payload)
@@ -165,7 +175,8 @@ class LLMClient:
                     self.last_usage = self._extract_usage(response)
                     return content
                 last_error = "模型返回了空内容"
-                attempt_max_tokens = min(attempt_max_tokens * 2, 4096)
+                if attempt_max_tokens is not None:
+                    attempt_max_tokens = min(attempt_max_tokens * 2, 4096)
             except LLMError:
                 raise
             except Exception as exc:

@@ -321,7 +321,7 @@ class MediaHub:
                     data, ext = await gen.generate(image_prompt)
                     out.image_path = str(store.save_outbox(data, ext))
                     out.image_ext = ext
-                    log.info("角色 [%s] 触发生图：%s", character.get("name"), image_prompt[:40])
+                    log.info("角色 [%s] 触发生图：%s", character.get("name"), image_prompt)
                 except ImageError as exc:
                     message = str(exc)
                     log.warning("图像生成失败：%s", message)

@@ -317,6 +317,25 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
+def _clamp_prompt(text: str, limit: int) -> str:
+    """最终绘图描述的字数上限：超长时优先在最近的句末标点处收句。
+
+    主模型偶发写得比约定更长（或 token 上限截在句中）——按字符硬切会把
+    句子拦腰截断，生图模型拿到半句话容易画歪；优先在 limit 内最后一个
+    句末标点处收尾，找不到足够靠后的句读才退化为硬切 + 省略号。
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = -1
+    for p in ("。", "！", "？", "!", "?"):
+        cut = max(cut, window.rfind(p))
+    if cut >= int(limit * 0.4):
+        return window[: cut + 1]
+    return text[: limit - 1] + "…"
+
+
 _FUSE_SYSTEM_PROMPT = (
     "你是绘图提示词写手。给你一段简短的绘图描述、一位角色的设定"
     "（以及可选的画面风格要求），把它理解、解释、融合、扩写成生图模型"
@@ -410,7 +429,7 @@ def parse_image_fuse(raw: str) -> str:
         lines = lines[1:]
     text = "\n".join(lines).strip()
     text = re.sub(r"^\s*(?:-|•|\d+[.、)]\s*)", "", text).strip()
-    return _truncate(text, 500)
+    return _clamp_prompt(text, 500)
 
 
 async def fuse_image_prompt(
@@ -438,7 +457,9 @@ async def fuse_image_prompt(
     messages = build_image_fuse_messages(prompt, character, style_text)
     for attempt in range(2):
         try:
-            raw = await asyncio.wait_for(llm.chat(messages, max_tokens=1024, temperature=0.4), timeout=timeout)
+            # max_tokens=None：不限制主模型输出长度（服务端默认上限足够）；
+            # 输出超长时由 _clamp_prompt 按句收口，不会拦腰截断
+            raw = await asyncio.wait_for(llm.chat(messages, max_tokens=None, temperature=0.4), timeout=timeout)
         except asyncio.TimeoutError:
             log.warning("绘图描述融合超时（%.0fs），用原描述生图", timeout)
             return prompt, False

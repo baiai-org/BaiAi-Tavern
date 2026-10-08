@@ -1686,6 +1686,42 @@ def phase_unit_logic(c: Checker) -> None:
         str(_tok_fake.chat.completions.calls),
     )
 
+    # 不限制主模型 TOKEN：chat(max_tokens=None) 时请求体不带 max_tokens
+    class _NoTokFakeCompletions:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append("max_tokens" in kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="完整"))])
+
+    class _NoTokFakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=_NoTokFakeCompletions())
+
+        async def close(self):
+            pass
+
+    _notok_fake = _NoTokFakeClient()
+    _notok_client = LLMClient(base_url="http://10.0.0.7:8000/v1", api_key="", model="m", max_tokens=500)
+    _notok_client._client = _notok_fake
+    _notok_client._signature = (_notok_client.base_url, _notok_client.api_key, _notok_client.timeout, _notok_client.model)
+    _notok_reply = asyncio.run(_notok_client.chat([{"role": "user", "content": "hi"}], max_tokens=None))
+    c.check(
+        "chat(max_tokens=None)：请求体不带 max_tokens（不限制主模型输出长度）",
+        _notok_reply == "完整" and _notok_fake.chat.completions.calls == [False],
+        str(_notok_fake.chat.completions.calls),
+    )
+    _notok_client2 = LLMClient(base_url="http://10.0.0.7:8000/v1", api_key="", model="m", max_tokens=500)
+    _notok_client2._client = _notok_fake
+    _notok_client2._signature = (_notok_client2.base_url, _notok_client2.api_key, _notok_client2.timeout, _notok_client2.model)
+    asyncio.run(_notok_client2.chat([{"role": "user", "content": "hi"}]))
+    c.check(
+        "chat() 不传 max_tokens 时仍用配置值（主回复链路行为不变）",
+        _notok_fake.chat.completions.calls[-1] is True,
+        str(_notok_fake.chat.completions.calls),
+    )
+
     # missing_fields：未配置提示要精确到缺哪个字段
     _mf_ok = (
         ProviderSpec(slot="vision", engine=ENGINE_OPENAI, base_url="https://api.deepseek.com/v1", model="")
@@ -2200,6 +2236,23 @@ def phase_unit_logic(c: Checker) -> None:
         and parse_image_fuse("好的，绘图描述是：「月下街道」") == "月下街道"
         and parse_image_fuse("") == "",
         repr(parse_image_fuse("好的，绘图描述是：「月下街道」")),
+    )
+    from bot.media.images import _clamp_prompt
+
+    _long_s = "第一句描写场景的完整内容。" * 30 + "没有句末标点的超长尾巴拖到后面去"
+    _clamped = _clamp_prompt(_long_s, 50)
+    c.check(
+        "融合输出超长时按句末标点收口，不拦腰截断句子",
+        _clamped.endswith("。") and len(_clamped) <= 50
+        and _clamped == "第一句描写场景的完整内容。" * 3,
+        "len=%d tail=%r" % (len(_clamped), _clamped[-20:]),
+    )
+    _long_n = "ab" * 60
+    _clamped_n = _clamp_prompt(_long_n, 50)
+    c.check(
+        "融合输出超长且无句读时退化为硬切 + 省略号",
+        _clamped_n.endswith("…") and len(_clamped_n) <= 50,
+        repr(_clamped_n[-10:]),
     )
 
     class _FakeFuseLLM:
