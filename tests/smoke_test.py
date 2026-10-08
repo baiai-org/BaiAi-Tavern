@@ -2203,25 +2203,25 @@ def phase_unit_logic(c: Checker) -> None:
         "personality": "软萌、爱撒娇、怕黑",
     }
     _fused_msgs = build_image_fuse_messages("画一张我的照片", _with_char)
+    _fuse_sys = _fused_msgs[0]["content"]
     c.check(
-        "融合消息：system 教光影判定规则（无要求默认白天 / 有要求按要求，由主模型判定）",
-        "绘图提示词写手" in _fused_msgs[0]["content"]
-        and "由你判定" in _fused_msgs[0]["content"]
-        and "默认白天" in _fused_msgs[0]["content"]
-        and "阳光灿烂" in _fused_msgs[0]["content"]
-        and "按要求" in _fused_msgs[0]["content"]
-        and "不要" in _fused_msgs[0]["content"]
-        and "粉色长发" in _fused_msgs[1]["content"]
-        and "画一张我的照片" in _fused_msgs[1]["content"],
-        _fused_msgs[0]["content"][:200],
+        "融合规则：只写风格+角色名+在干什么+表情（重点人物与画风，1~2 句）",
+        "日本动漫京阿尼画风" in _fuse_sys
+        and "角色的名字" in _fuse_sys
+        and "在干什么" in _fuse_sys
+        and "表情" in _fuse_sys
+        and "1~2 句" in _fuse_sys,
+        _fuse_sys[:200],
     )
     c.check(
-        "融合规则：角色本人出场时描述带角色名 + 风格名称必须写明（动漫=日本动漫京阿尼画风 / 自定义原样写明）",
-        "角色的名字" in _fused_msgs[0]["content"]
-        and "写明风格名称" in _fused_msgs[0]["content"]
-        and "日本动漫京阿尼画风" in _fused_msgs[0]["content"]
-        and "解释扩展" in _fused_msgs[0]["content"],
-        _fused_msgs[0]["content"][:300],
+        "融合规则：不写光线/服装外貌/环境摆件，不堆砌形容词",
+        "不写光线" in _fuse_sys
+        and "不写服装" in _fuse_sys
+        and "不写环境和摆件" in _fuse_sys
+        and "不堆砌形容词" in _fuse_sys
+        and "粉色长发" in _fused_msgs[1]["content"]
+        and "画一张我的照片" in _fused_msgs[1]["content"],
+        _fuse_sys[:300],
     )
     _fused_msgs2 = build_image_fuse_messages(
         "画一张我的照片", _with_char, style_text="，画面风格：吉卜力风格，水彩质感"
