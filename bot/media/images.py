@@ -35,7 +35,9 @@ log = get_logger("bot.media.images")
 
 _DATA_URL_RE = re.compile(r"^data:image/[a-z0-9.+-]+;base64,(.+)$", re.S)
 
-#: 生图像素上限：宽 / 高都不超过 1000（请求尺寸钳制 + 返回图片缩放双保险）
+#: 生图像素上限：宽 / 高都不超过 1000。
+#: **生图时就限制**：size 参数钳制（工具端）+ 画布尺寸写进提示词（提示词端）；
+#: 模型两者都忽略时返回图片才等比缩放（最后兜底）。
 MAX_IMAGE_PIXEL = 1000
 
 
@@ -60,7 +62,11 @@ def clamp_image_size(size: str, limit: int = MAX_IMAGE_PIXEL) -> str:
 
 
 def _downscale_if_needed(data: bytes, ext: str, limit: int = MAX_IMAGE_PIXEL) -> Tuple[bytes, str]:
-    """返回图片超过 ``limit × limit`` 时等比缩放到以内（PIL 失败原样返回）。"""
+    """返回图片超过 ``limit × limit`` 时等比缩放（最后兜底，PIL 失败原样返回）。
+
+    正常情况生图请求的 size 参数与提示词里都带了画布尺寸，出图就应在限制内；
+    只有模型把两者都忽略时才走到这里。
+    """
     try:
         import io
 
@@ -613,8 +619,14 @@ class ImageGenerator:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ImageError("绘图描述为空")
-        # 生图像素限制在 1000×1000 以内：请求尺寸先钳制（默认 1024x1024 → 1000x1000）
+        # 生图像素限制在 1000×1000 以内，**生图时就限制**：
+        # ① size 参数钳制（工具端：端点接受 size 参数时按钳制后的尺寸出图）；
+        # ② 画布尺寸写进提示词（提示词端：Gemini 原生等没有 size 参数的
+        #    端点，靠提示词里的尺寸 / 比例约束出图）。
         size = clamp_image_size(size)
+        _size_match = re.match(r"^\s*(\d+)\s*[xX*]\s*(\d+)\s*$", str(size or ""))
+        if _size_match:
+            prompt = "%s，画布尺寸 %s×%s 像素" % (prompt, _size_match.group(1), _size_match.group(2))
 
         forced = str(spec.extra.get("image_api") or "").strip().lower()
         order: List[str] = []
@@ -642,7 +654,7 @@ class ImageGenerator:
                     data, ext = await self._via_dashscope_native(prompt, size)
                 else:
                     data, ext = await self._via_chat(prompt, size)
-                # 双保险：模型不听话返回了更大的图，等比缩到 1000×1000 以内
+                # 最后兜底：模型把 size 参数和提示词里的画布尺寸都忽略了才缩
                 return _downscale_if_needed(data, ext)
             except ImageError as exc:
                 last_error = str(exc)

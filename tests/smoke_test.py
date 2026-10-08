@@ -1450,7 +1450,7 @@ def phase_unit_logic(c: Checker) -> None:
     # vLLM-Omni（Qwen-Image）完整流程：content 必须是数组；不带 extra_body 时
     # 200 但响应里没有图（推理白跑）；补 extra_body 后图放在 message.content 的
     # image_url 部件里（data URL）。
-    _omni_state = {"images_calls": 0, "chat_calls": 0, "last_extra_body": None}
+    _omni_state = {"images_calls": 0, "chat_calls": 0, "last_extra_body": None, "last_prompt": ""}
 
     class _CaseOmniHandler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -1464,6 +1464,10 @@ def phase_unit_logic(c: Checker) -> None:
                 _omni_state["chat_calls"] += 1
                 _omni_state["last_extra_body"] = body.get("extra_body")
                 content = (body.get("messages") or [{}])[0].get("content")
+                _omni_state["last_prompt"] = "".join(
+                    str(part.get("text") if isinstance(part, dict) else part)
+                    for part in (content if isinstance(content, list) else [content])
+                )
                 if isinstance(content, str):
                     self._reply(
                         400,
@@ -1548,17 +1552,68 @@ def phase_unit_logic(c: Checker) -> None:
         finally:
             loop.close()
         c.check(
-            "chat 出图：vLLM-Omni 流程（数组 content + 200 无图时补 extra_body + content 部件取图）",
+            "chat 出图：vLLM-Omni 流程（数组 content + 200 无图时补 extra_body + content 部件取图 + 提示词带画布尺寸）",
             len(omni_data) > 8
             and _omni_state["chat_calls"] == 3
             and isinstance(_omni_state["last_extra_body"], dict)
             and int(_omni_state["last_extra_body"].get("num_outputs_per_prompt") or 0) == 1
-            and int(_omni_state["last_extra_body"].get("height") or 0) == 1000,
-            "chat_calls=%d extra_body=%s"
-            % (_omni_state["chat_calls"], json.dumps(_omni_state["last_extra_body"])),
+            and int(_omni_state["last_extra_body"].get("height") or 0) == 1000
+            and "画布尺寸 1000×1000" in _omni_state["last_prompt"],
+            "chat_calls=%d extra_body=%s prompt=%r"
+            % (
+                _omni_state["chat_calls"],
+                json.dumps(_omni_state["last_extra_body"]),
+                _omni_state["last_prompt"][:80],
+            ),
         )
     finally:
         _omni_srv.shutdown()
+
+    # 生图像素限制在生图请求时生效：/images/generations 路径的 size 参数与提示词都带画布尺寸
+    _classic_state = {"body": None}
+
+    class _CaseClassicHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            _classic_state["body"] = json.loads(self.rfile.read(length) or b"{}")
+            payload = {"data": [{"b64_json": _PNG_1X1}]}
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    _classic_srv = HTTPServer(("127.0.0.1", 0), _CaseClassicHandler)
+    threading.Thread(target=_classic_srv.serve_forever, daemon=True).start()
+    try:
+        _classic_spec = ProviderSpec(
+            slot="image",
+            engine=ENGINE_OPENAI,
+            base_url="http://127.0.0.1:%d/v1" % _classic_srv.server_address[1],
+            api_key="sk-classic",
+            model="some-image-model",
+        )
+        loop_classic = asyncio.new_event_loop()
+        try:
+            loop_classic.run_until_complete(
+                ImageGenerator(_classic_spec, timeout=10).generate("月下街道，一个人撑伞", size="1024x1024")
+            )
+        finally:
+            loop_classic.close()
+        _cb = _classic_state["body"] or {}
+        c.check(
+            "生图请求即带画布尺寸：size 参数钳到 1000x1000 + 提示词写「画布尺寸 1000×1000 像素」",
+            _cb.get("size") == "1000x1000"
+            and "画布尺寸 1000×1000 像素" in str(_cb.get("prompt") or "")
+            and str(_cb.get("prompt") or "").startswith("月下街道"),
+            "size=%r prompt=%r" % (_cb.get("size"), str(_cb.get("prompt") or ""))[:120],
+        )
+    finally:
+        _classic_srv.shutdown()
 
     # is_local：局域网私网地址不强制 API Key（用户本地 vLLM 走 10.x 内网）
     _local_cases = [
