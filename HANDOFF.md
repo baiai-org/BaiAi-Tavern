@@ -12,7 +12,7 @@
 | 这是什么 | Windows 桌面应用：让多个 AI 角色通过 **QQ 官方机器人** 主动给你发消息、并回复你的消息 |
 | 运行形态 | 两个进程：**GUI 进程**（PySide6，含托盘）+ **Bot 进程**（FastAPI + uvicorn + APScheduler），通过本机 HTTP/WS 通信 |
 | 怎么跑 | `scripts\start.bat`（开发模式，自动建 `.venv`）；或 `python -m app.main` / `python -m bot.main` |
-| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，开发环境 **711 项**（打包产物齐备时 **752 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
+| 怎么验证 | `python -m tests.smoke_test` 等 8 套自检，开发环境 **733 项**（打包产物齐备时 **774 项**）；`python -m pyflakes app bot common installer scripts tests` 必须干净 |
 | 关键硬约束 | ① 代码保持 **Python 3.9 兼容** ② 自检必须全绿 ③ 任何"外部数据 → Qt"的数值都要过 `app/qt_safe.py` ④ 富媒体失败必须降级回纯文字 |
 | 当前版本 | V0.2.2 开发中（分支 `v0.2.2`，基于 `543adc6`）：8 项修复 + 对话分级管理 + 按月/按天检索 + 语音存档；**尚未发布**，`main` / tag / Release 仍是 V0.2.1 |
 | 最大的坑 | 见第 10 节，尤其 **Qt `Signal(dict)` + 超 int64 整数**、**跑自检别带 `BAIAI_DATA_DIR` 环境变量**、**PowerShell 批量改源码** |
@@ -314,15 +314,15 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
 
 ---
 
-## 9. 自检体系（8 套，开发环境 711 项 / 打包产物齐备 752 项）
+## 9. 自检体系（8 套，开发环境 733 项 / 打包产物齐备 774 项）
 
 | 命令 | 项数 | 覆盖 |
 |---|---|---|
-| `python -m tests.smoke_test` | 279 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / 生图风格按角色人设自动匹配（二次元关键词→动漫风、写实关键词→写实风、无特征不强加、全局开关覆盖）/ TTS 风格参数与试听文案池 / 默认语音概率 10% / 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ 全量群消息 @ 判定单元（`<@AppID>` 占位 / `mentions[].id` / @ 别的机器人 / 无 @ / @ 事件恒真）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
-| `python -m tests.official_smoke` | 78 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且音频被下载存档（V0.2.2：优先 voice_wav_url））** + **全量群消息段（GROUP_MESSAGE_CREATE：@ 自己才回 / @ 别的机器人让路 / 普通消息按开关 / 同一 msg_id 重复推送只回一次）** |
-| `python -m tests.multibot_smoke` | 43 | 两个官方机器人 + 两个角色互不串台 + **多机器人群：@ 谁谁回答（同一条全量群消息推到两个平台，只有被 @ 的回复；普通群消息都回）** |
+| `python -m tests.smoke_test` | 290 | 单元（含**模型槽位 / 主模型整合 / asr 槽位移除与旧配置清理 / Gemini 生图参数降级 / Gemini 原生接口 / chat modalities 大小写兜底 / chat 出图 content 数组格式兜底（端点要求 messages[].content 为内容数组时自动换格式）/ chat 出图多种返回形状兜底（顶层 data[]、非标准 b64 键、data URL 就地解码）/ vLLM-Omni（Qwen-Image）200 无图时按官方示例补 extra_body 重试 / 百炼兼容模式 images 404 时走原生协议 multimodal-generation（content 部件 image 键 + URL 下载）/ 局域网私网地址（10.x / 192.168 / 172.16-31 / .local）识别为本地不强制 Key / 回复链路局域网端点 Key 留空判定（与界面提示一致；SDK 空 Key 自动补占位）/ 推理模型空正文重试自动翻倍长度（上限 4096）/ 未配置提示按字段精确列缺失项 / 认不出图片数据时报错带响应体 / 图像理解内置红色测试图（测试线路独立于图像生成）/ 角色卡 Chub 风格（avatar 远程 URL 下载 + 图片魔数验证 / 非图片头像不留垃圾字节 / 非标准 extensions 不破坏解析 / PNG chara 的 URL-safe base64 与明文 JSON 兜底 / tEXt 块 UTF-8 容错 / 报告卡片本身未写的核心字段——Chub 卡常只写描述+开场白，其余字段空属卡片内容问题）/ 提示词卫生（Chub 整页 HTML 版 creator_notes 不进提示词、短纯文本保留 / 发送前清理 Markdown 图片链接）/ 测试线路表单值 / 服务商预设全覆盖 / 入站语音平台参考转写（零配置零下载）/ 角色级音色调节覆盖全局 / 头像上传与旧文件清理 / [IMG] 句中识别 / 生图风格按角色人设自动匹配（二次元关键词→动漫风、写实关键词→写实风、无特征不强加、全局开关覆盖）/ TTS 风格参数与试听文案池 / 默认语音概率 5%（V0.2.2 起）/ 视觉图片挂当前 user 消息与 MIME 按文件头识别 / 百炼 TTS 引擎（端点按模型路由 / Base URL 归一 / Base64 与 audio.url 两种返回 / 业务错误码透传 / 411 三族音色不混用提示 / qwen-audio 全量官方参数 rate/pitch/volume/format/sample_rate/language_hints/instruction 与 GUI 值映射）/ TTS 调教 SKILL（instruct 门控 / 官方格式提示词 / 指令解析 / 主模型生成与空内容重试 / instructions + optimize_instructions + language_type 请求体 / Qwen-Audio 标签门控、官方语义与官方示例提示词、标签逐句覆盖、标签+指令双输出解析、标签校验与近似拼写归一、编造中文标签剥除、本地兜底、思考类模型不限制思考长度 4096）/ 全量群消息 @ 判定单元（`<@AppID>` 占位 / `mentions[].id` / @ 别的机器人 / 无 @ / @ 事件恒真 / **V0.2.2：is_you 标记 / user_openid 字段匹配 / 多身份集合 / 状态化去重（先让路后到 @ 仍处理、已回复不重发、@ 先到去重后到全量）** / **按机器人生效段 effective_section（全局兜底 + 键级覆盖）**）/ TTS 缺省引擎 dashscope 且引擎列表首位**）+ 端到端（mock 官方平台与 mock LLM） |
+| `python -m tests.official_smoke` | 82 | 官方通道：凭证 / 网关 / 单聊 / 群聊 / 主动消息 / 重连 / 错误码 + **V0.2 富媒体段（TTS 语音回复 / 视觉理解且图片挂当前 user 消息 / [IMG] 生图 / 语音参考转写进模型上下文且音频被下载存档（V0.2.2：优先 voice_wav_url））** + **全量群消息段（GROUP_MESSAGE_CREATE：@ 自己才回 / @ 别的机器人让路 / 普通消息按开关 / 同一 msg_id 重复推送只回一次 / V0.2.2 新版格式无 @ 占位 + is_you 仍回复 / 新版 @ 别的机器人让路 / 同 msg_id 全量先到让路后 @ 事件仍回复、@ 先到后全量重推不重复）** |
+| `python -m tests.multibot_smoke` | 44 | 两个官方机器人 + 两个角色互不串台 + **多机器人群：@ 谁谁回答（同一条全量群消息推到两个平台，只有被 @ 的回复；普通群消息都回；V0.2.2 新版 is_you 格式同样 @ 谁谁回答）** |
 | `python -m tests.onboarding_smoke` | 88 | 6 步配置引导（含步骤标题 `EXPECTED_HEADS`；含**汇总页隐藏「取消引导」/ LLM 密钥留空也能「完成」不 KeyError**） |
-| `python -m tests.gui_smoke` | 153 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口/生图风格选项）**、**对话页媒体显示（图片消息渲染缩略图 / 语音消息渲染播放徽标 + 转写文字 / 选中后按钮可用）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
+| `python -m tests.gui_smoke` | 159 | 界面集成（offscreen）：**八页**裁切体检、**全页面宽度守卫（逐页断言滚动内容宽度 ≤ 视口，防「长单行文本撑宽页面、右侧被裁」回归）**、官方表单、超大 ID 回归、**模型路由（预设/获取模型列表/获取模型列表联动刷新音色/测试线路按表单值/视觉测试线路校验内置红色测试图/测试完成后按钮保持可用防焦点串段/生图双引擎与 Gemini 原生预设自动切引擎/TTS 音色调节字段与输出格式/TTS 三引擎切换与百炼音色清单/全量音色清单加载/角色音色试听入口）**、**「消息设置」页（V0.2.2：富媒体行为从模型路由搬来；顶部设置范围下拉全局/按机器人；按机器人保存只写覆盖段）**、**机器人页生图风格按机器人设置（auto/anime/realistic/off）**、**对话页媒体显示（图片消息渲染缩略图 / 语音消息渲染播放徽标 + 转写文字 / 选中后按钮可用 / V0.2.2：真实鼠标点击缩略图即打开、点击徽标即播放）**、**角色音色对话框（回显 + 角色级调节输出）/ 角色卡音色按钮与可点击头像 / 角色编辑滚动区 / 编辑对话框 {{char}}/{{user}} 占位符说明 / HTML 版补充设定（Chub 展示页）不影响对话的说明**、**安装与更新一体窗口（区块/控件/新版检测/跳过版本/不再提示/启动提醒四出口，mock GitHub API）** |
 | `python -m tests.scheduler_live` | 14 | 定时触发"真实到点"慢速自检 |
 | `python -m tests.frozen_smoke` | 0 / 34 | **打包产物**（无产物时自动跳过 0 项；产物齐备时 34 项，`--force` 强制） |
 | `python -m tests.installer_smoke` | 56 / 63 | **真实安装包**安装/卸载 + 主程序自卸载 + 旧版本运行时升级 + **更新系统（版本比较/附件挑选/SHA256/下载进度/启动限流/静默拉起，本地 HTTP 模拟 GitHub，无外网依赖）** + **V0.2.2 多线程分段下载（大文件 Range 分段与完整覆盖、plan_ranges 切分）**（无产物 56 项；有产物 63 项） |
@@ -340,6 +340,12 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
   user 消息文本），
   用于断言"平台参考转写进了模型上下文"。
   控制面 `emit_c2c` / `emit_group` 支持 `attachments` 列表（含 `asr_refer_text`），`reset()` 支持 `vision_text`。
+  **V0.2.2：`emit_group` 新增 `mention_marker`（是否带 `<@AppID>` 前缀，模拟平台新格式时传 False）、
+  `mention_is_you`（True/False → mention 条目带 `is_you` 标记）、`mention_fields`（dict 合并进
+  mention 条目，可覆盖 `id/user_openid/union_openid` 等字段模拟不匹配的身份格式）；
+  mention 条目现固定带 `user_openid=mention_appid` 等身份字段（与真实平台 User 对象一致）——
+  要模拟「全量推送但 @ 的不是自己」必须用 `mention_fields` 把身份字段改得不匹配
+  （见坑 48 与 official/multibot 的新格式用例）**。
   辅助：`MockProcess`、`reset()`、`emit_c2c()`、`emit_group()`、`official_sent()`、
   常量 `OFFICIAL_APP_ID/SECRET/TOKEN`、`DEFAULT_OPENID`。
 - `tests/card_factory.py`：生成测试用 PNG / JSON / YAML 角色卡。
@@ -882,8 +888,10 @@ scripts\build_installer.bat  :: dist\BaiAi-Tavern V0.2.2.exe（组装 payload �
   切换设置 / 富媒体行为搬到「消息设置」、生图风格搬到「机器人」页按机器人设置 /
   语音概率默认 5% / 媒体单元格真实可点击，见坑 49）已在 mock 全链验证，
   待用户真实 QQ 验证 → `main` 合入 + tag `v0.2.2` + GitHub Release `v0.2.2`。
-  重新打包后需更新 `dist\SHA256SUMS.txt` 与无空格发布副本（旧 SHA
-  `D6F82183082966237F21A2CFCA42D1FC3DB6F12955F73E10D551276082479991` 已作废）。
+  重新打包已完成（2026-10-08 第二批后）：`dist\BaiAi-Tavern V0.2.2.exe`（本地安装用）+
+  无空格发布副本 `dist\BaiAi-Tavern-V0.2.2.exe`（SHA256
+  `D112E6C8A5A02FC0691BA0A77DA3685F1A5077C8C07426BFF875E79F0A003749`，
+  见 `dist\SHA256SUMS.txt`）+ 绿色版 `dist\BaiAi-Tavern\`。
   上传 Release 用无空格副本 + SHA256SUMS.txt（octet-stream + `?name=`，见坑 10）。
   真机重点看：**多机器人不再同时发同样的主动消息**、**多机器人群里 @ 谁谁回答（其他机器人不抢话，
   平台新旧两种 @ 格式都认）**、**群消息 @/不 @ 都按开关响应（重点回归：群 @ 是否恢复回复；
